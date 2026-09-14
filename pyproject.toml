@@ -1,7 +1,7 @@
 [project]
 name = "chapter-and-verse"
 version = "0.1.0"
-description = "Add your description here"
+description = "Question answering for UK legislation, citing the exact provision behind every claim at the version in force on the date asked."
 readme = "README.md"
 authors = [
     { name = "Serhii Tsykunov", email = "serhii.tsykunov@gmail.com" }
