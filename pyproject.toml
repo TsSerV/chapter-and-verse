@@ -3,9 +3,7 @@ name = "chapter-and-verse"
 version = "0.1.0"
 description = "Question answering for UK legislation, citing the exact provision behind every claim at the version in force on the date asked."
 readme = "README.md"
-authors = [
-    { name = "Serhii Tsykunov", email = "serhii.tsykunov@gmail.com" }
-]
+authors = [{ name = "Serhii Tsykunov" }]
 requires-python = ">=3.13"
 dependencies = [
     "fastapi>=0.141.1",
@@ -22,9 +20,4 @@ requires = ["uv_build>=0.12.13,<0.13.0"]
 build-backend = "uv_build"
 
 [dependency-groups]
-dev = [
-    "mypy>=2.3.1",
-    "pytest>=9.1.1",
-    "respx>=0.23.1",
-    "ruff>=0.16.7",
-]
+dev = ["mypy>=2.3.1", "pytest>=9.1.1", "respx>=0.23.1", "ruff>=0.16.7"]

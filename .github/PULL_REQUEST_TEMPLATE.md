@@ -2,4 +2,4 @@
 
 ## Why
 
-## How I tested
+## How it was tested
