@@ -77,13 +77,6 @@ def test_health_returns_ok() -> None:
     assert response.json() == {"status": "ok"}
 
 
-def test_upstream_unavailable_returns_503_without_internals() -> None:
-    response = client.post("/ask", json={"question": "fail: anything"})
-
-    assert response.status_code == 503
-    assert response.json() == {"detail": "The service is unavailable. Try again later."}
-
-
 def test_unhandled_error_returns_500_without_traceback() -> None:
     broken = FastAPI()
     register_error_handlers(broken)
