@@ -3,7 +3,7 @@ from functools import partial
 from typing import Annotated, Any
 
 import httpx
-from fastapi import Depends
+from fastapi import Depends, Request
 
 from chapter_and_verse.config import Settings, get_settings
 from chapter_and_verse.errors import UpstreamUnavailable
@@ -20,7 +20,9 @@ SYSTEM_PROMPT = (
 Answerer = Callable[[str], Awaitable[str]]
 
 
-async def ask_claude(question: str, settings: Settings) -> str:
+async def ask_claude(
+    question: str, settings: Settings, client: httpx.AsyncClient
+) -> str:
     headers = {
         "x-api-key": settings.claude_api_token.get_secret_value(),
         "anthropic-version": ANTHROPIC_VERSION,
@@ -32,9 +34,8 @@ async def ask_claude(question: str, settings: Settings) -> str:
         "messages": [{"role": "user", "content": question}],
     }
     try:
-        async with httpx.AsyncClient(timeout=settings.claude_timeout_seconds) as client:
-            response = await client.post(MESSAGES_URL, headers=headers, json=body)
-            response.raise_for_status()
+        response = await client.post(MESSAGES_URL, headers=headers, json=body)
+        response.raise_for_status()
     except httpx.HTTPStatusError as exc:
         raise UpstreamUnavailable(
             f"Claude returned {exc.response.status_code}"
@@ -62,5 +63,14 @@ def extract_text(response: httpx.Response) -> str:
     return "".join(texts)
 
 
-def get_answerer(settings: Annotated[Settings, Depends(get_settings)]) -> Answerer:
-    return partial(ask_claude, settings=settings)
+def get_http_client(request: Request) -> httpx.AsyncClient:
+    # Created once in the app lifespan, see main.py.
+    client: httpx.AsyncClient = request.app.state.http_client
+    return client
+
+
+def get_answerer(
+    settings: Annotated[Settings, Depends(get_settings)],
+    client: Annotated[httpx.AsyncClient, Depends(get_http_client)],
+) -> Answerer:
+    return partial(ask_claude, settings=settings, client=client)

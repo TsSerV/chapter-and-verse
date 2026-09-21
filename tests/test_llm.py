@@ -1,4 +1,5 @@
 import json
+from collections.abc import AsyncIterator
 
 import httpx
 import pytest
@@ -20,6 +21,13 @@ def settings() -> Settings:
     return Settings(claude_api_token=SecretStr("test-token"), claude_model="test-model")
 
 
+@pytest.fixture
+async def client() -> AsyncIterator[httpx.AsyncClient]:
+    # Stands in for the shared client the app creates at startup.
+    async with httpx.AsyncClient() as client:
+        yield client
+
+
 def claude_reply(
     *blocks: dict[str, str], stop_reason: str = "end_turn"
 ) -> httpx.Response:
@@ -29,7 +37,9 @@ def claude_reply(
 
 
 @respx.mock
-async def test_returns_text_from_reply(settings: Settings) -> None:
+async def test_returns_text_from_reply(
+    settings: Settings, client: httpx.AsyncClient
+) -> None:
     route = respx.post(MESSAGES_URL).mock(
         return_value=claude_reply(
             {"type": "thinking", "thinking": ""},
@@ -37,7 +47,7 @@ async def test_returns_text_from_reply(settings: Settings) -> None:
         )
     )
 
-    answer = await ask_claude(QUESTION, settings)
+    answer = await ask_claude(QUESTION, settings, client)
 
     assert answer == "On 25 May 2018."
     sent = route.calls.last.request
@@ -49,42 +59,50 @@ async def test_returns_text_from_reply(settings: Settings) -> None:
 
 
 @respx.mock
-async def test_server_error_raises_upstream_unavailable(settings: Settings) -> None:
+async def test_server_error_raises_upstream_unavailable(
+    settings: Settings, client: httpx.AsyncClient
+) -> None:
     respx.post(MESSAGES_URL).mock(return_value=httpx.Response(500))
 
     with pytest.raises(UpstreamUnavailable):
-        await ask_claude(QUESTION, settings)
+        await ask_claude(QUESTION, settings, client)
 
 
 @respx.mock
-async def test_timeout_raises_upstream_unavailable(settings: Settings) -> None:
+async def test_timeout_raises_upstream_unavailable(
+    settings: Settings, client: httpx.AsyncClient
+) -> None:
     respx.post(MESSAGES_URL).mock(side_effect=httpx.ReadTimeout("too slow"))
 
     with pytest.raises(UpstreamUnavailable):
-        await ask_claude(QUESTION, settings)
+        await ask_claude(QUESTION, settings, client)
 
 
 @respx.mock
-async def test_connection_error_raises_upstream_unavailable(settings: Settings) -> None:
+async def test_connection_error_raises_upstream_unavailable(
+    settings: Settings, client: httpx.AsyncClient
+) -> None:
     respx.post(MESSAGES_URL).mock(side_effect=httpx.ConnectError("no route"))
 
     with pytest.raises(UpstreamUnavailable):
-        await ask_claude(QUESTION, settings)
+        await ask_claude(QUESTION, settings, client)
 
 
 @respx.mock
 async def test_reply_without_text_raises_upstream_unavailable(
-    settings: Settings,
+    settings: Settings, client: httpx.AsyncClient
 ) -> None:
     respx.post(MESSAGES_URL).mock(return_value=claude_reply(stop_reason="refusal"))
 
     with pytest.raises(UpstreamUnavailable):
-        await ask_claude(QUESTION, settings)
+        await ask_claude(QUESTION, settings, client)
 
 
 @respx.mock
-async def test_unreadable_reply_raises_upstream_unavailable(settings: Settings) -> None:
+async def test_unreadable_reply_raises_upstream_unavailable(
+    settings: Settings, client: httpx.AsyncClient
+) -> None:
     respx.post(MESSAGES_URL).mock(return_value=httpx.Response(200, text="<html>"))
 
     with pytest.raises(UpstreamUnavailable):
-        await ask_claude(QUESTION, settings)
+        await ask_claude(QUESTION, settings, client)
