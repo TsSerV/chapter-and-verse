@@ -5,10 +5,16 @@ import httpx
 import pytest
 import respx
 from pydantic import SecretStr
+from tenacity import wait_none
 
 from chapter_and_verse.config import Settings
 from chapter_and_verse.errors import UpstreamUnavailable
-from chapter_and_verse.llm import ANTHROPIC_VERSION, MESSAGES_URL, ask_claude
+from chapter_and_verse.llm import (
+    ANTHROPIC_VERSION,
+    MESSAGES_URL,
+    _post_to_claude,
+    ask_claude,
+)
 
 pytestmark = pytest.mark.anyio
 
@@ -26,6 +32,12 @@ async def client() -> AsyncIterator[httpx.AsyncClient]:
     # Stands in for the shared client the app creates at startup.
     async with httpx.AsyncClient() as client:
         yield client
+
+
+@pytest.fixture(autouse=True)
+def no_backoff(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Same retry rules, without the waits between attempts.
+    monkeypatch.setattr(_post_to_claude.retry, "wait", wait_none())
 
 
 def claude_reply(
@@ -59,33 +71,55 @@ async def test_returns_text_from_reply(
 
 
 @respx.mock
-async def test_server_error_raises_upstream_unavailable(
+async def test_transient_failure_is_retried(
     settings: Settings, client: httpx.AsyncClient
 ) -> None:
-    respx.post(MESSAGES_URL).mock(return_value=httpx.Response(500))
+    route = respx.post(MESSAGES_URL).mock(
+        side_effect=[
+            httpx.ConnectTimeout("blip"),
+            httpx.ConnectTimeout("blip"),
+            claude_reply({"type": "text", "text": "On 25 May 2018."}),
+        ]
+    )
+
+    answer = await ask_claude(QUESTION, settings, client)
+
+    assert answer == "On 25 May 2018."
+    assert route.call_count == 3
+
+
+@pytest.mark.parametrize("status", [400, 500])
+@respx.mock
+async def test_error_status_is_not_retried(
+    status: int, settings: Settings, client: httpx.AsyncClient
+) -> None:
+    route = respx.post(MESSAGES_URL).mock(return_value=httpx.Response(status))
 
     with pytest.raises(UpstreamUnavailable):
         await ask_claude(QUESTION, settings, client)
+    assert route.call_count == 1
 
 
 @respx.mock
 async def test_timeout_raises_upstream_unavailable(
     settings: Settings, client: httpx.AsyncClient
 ) -> None:
-    respx.post(MESSAGES_URL).mock(side_effect=httpx.ReadTimeout("too slow"))
+    route = respx.post(MESSAGES_URL).mock(side_effect=httpx.ReadTimeout("too slow"))
 
     with pytest.raises(UpstreamUnavailable):
         await ask_claude(QUESTION, settings, client)
+    assert route.call_count == 3
 
 
 @respx.mock
 async def test_connection_error_raises_upstream_unavailable(
     settings: Settings, client: httpx.AsyncClient
 ) -> None:
-    respx.post(MESSAGES_URL).mock(side_effect=httpx.ConnectError("no route"))
+    route = respx.post(MESSAGES_URL).mock(side_effect=httpx.ConnectError("no route"))
 
     with pytest.raises(UpstreamUnavailable):
         await ask_claude(QUESTION, settings, client)
+    assert route.call_count == 3
 
 
 @respx.mock
