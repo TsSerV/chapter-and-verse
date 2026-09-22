@@ -4,6 +4,12 @@ from typing import Annotated, Any
 
 import httpx
 from fastapi import Depends, Request
+from tenacity import (
+    retry,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_exponential,
+)
 
 from chapter_and_verse.config import Settings, get_settings
 from chapter_and_verse.errors import UpstreamUnavailable
@@ -34,17 +40,30 @@ async def ask_claude(
         "messages": [{"role": "user", "content": question}],
     }
     try:
-        response = await client.post(MESSAGES_URL, headers=headers, json=body)
+        response = await _post_to_claude(client, headers, body)
         response.raise_for_status()
     except httpx.HTTPStatusError as exc:
         raise UpstreamUnavailable(
             f"Claude returned {exc.response.status_code}"
         ) from exc
     except httpx.RequestError as exc:
-        # Timeouts and connection failures.
+        # Timeouts and connection failures, after the last attempt.
         raise UpstreamUnavailable(f"Claude request failed: {exc!r}") from exc
 
     return extract_text(response)
+
+
+# A request that got no response is retried. An error status is not.
+@retry(
+    retry=retry_if_exception_type(httpx.RequestError),
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=0.5, max=4),
+    reraise=True,  # raise the last httpx error, not tenacity's RetryError
+)
+async def _post_to_claude(
+    client: httpx.AsyncClient, headers: dict[str, str], body: dict[str, Any]
+) -> httpx.Response:
+    return await client.post(MESSAGES_URL, headers=headers, json=body)
 
 
 def extract_text(response: httpx.Response) -> str:
