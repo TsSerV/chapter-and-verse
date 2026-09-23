@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from structlog.testing import capture_logs
 
 from chapter_and_verse.errors import register_error_handlers
 from chapter_and_verse.main import app
@@ -75,6 +76,14 @@ def test_health_returns_ok() -> None:
 
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
+
+
+def test_health_logs_nothing() -> None:
+    # A probe hits this constantly, so it must not fill the log.
+    with capture_logs() as logs:
+        client.get("/health")
+
+    assert logs == []
 
 
 def test_unhandled_error_returns_500_without_traceback() -> None:

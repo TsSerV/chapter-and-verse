@@ -4,7 +4,9 @@ from contextlib import asynccontextmanager
 from typing import Annotated
 
 import httpx
+import structlog
 from fastapi import Depends, FastAPI
+from structlog.typing import FilteringBoundLogger
 
 from chapter_and_verse.config import get_settings
 from chapter_and_verse.errors import register_error_handlers
@@ -16,9 +18,24 @@ from chapter_and_verse.models import (
     HealthResponse,
 )
 
+logger: FilteringBoundLogger = structlog.get_logger()
+
+
+def configure_logging() -> None:
+    # One JSON object per line, with a level and a UTC timestamp.
+    structlog.configure(
+        processors=[
+            structlog.processors.add_log_level,
+            structlog.processors.TimeStamper(fmt="iso"),
+            structlog.processors.format_exc_info,
+            structlog.processors.JSONRenderer(),
+        ]
+    )
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    configure_logging()
     # One pooled client for the whole process, closed on shutdown.
     settings = get_settings()
     async with httpx.AsyncClient(
@@ -39,7 +56,7 @@ register_error_handlers(app)
 
 @app.get("/health")
 def health() -> HealthResponse:
-    # Cheap on purpose: this becomes a Kubernetes probe.
+    # Cheap on purpose: this becomes a Kubernetes probe. It logs nothing.
     return HealthResponse(status="ok")
 
 
@@ -53,6 +70,26 @@ async def ask(
     request: AskRequest, answer: Annotated[Answerer, Depends(get_answerer)]
 ) -> AskResponse:
     start = time.perf_counter()
-    text = await answer(request.question)
-    latency_ms = int((time.perf_counter() - start) * 1000)
+    # The question is user input, so only its length is logged.
+    try:
+        text = await answer(request.question)
+    except Exception:
+        logger.warning(
+            "ask",
+            outcome="error",
+            question_length=len(request.question),
+            latency_ms=elapsed_ms(start),
+        )
+        raise
+    latency_ms = elapsed_ms(start)
+    logger.info(
+        "ask",
+        outcome="ok",
+        question_length=len(request.question),
+        latency_ms=latency_ms,
+    )
     return AskResponse(answer=text, latency_ms=latency_ms)
+
+
+def elapsed_ms(start: float) -> int:
+    return int((time.perf_counter() - start) * 1000)
