@@ -1,9 +1,9 @@
-import logging
-
+import structlog
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
+from structlog.typing import FilteringBoundLogger
 
-logger = logging.getLogger(__name__)
+logger: FilteringBoundLogger = structlog.get_logger()
 
 
 class UpstreamUnavailable(Exception):
@@ -13,7 +13,7 @@ class UpstreamUnavailable(Exception):
 async def upstream_unavailable_handler(
     request: Request, exc: Exception
 ) -> JSONResponse:
-    logger.warning("Upstream unavailable on %s: %r", request.url.path, exc)
+    logger.warning("upstream_unavailable", path=request.url.path, error=repr(exc))
     return JSONResponse(
         status_code=503,
         content={"detail": "The service is unavailable. Try again later."},
@@ -22,7 +22,7 @@ async def upstream_unavailable_handler(
 
 async def unhandled_error_handler(request: Request, exc: Exception) -> JSONResponse:
     # Full traceback goes to the log, never to the client.
-    logger.exception("Unhandled error on %s", request.url.path, exc_info=exc)
+    logger.exception("unhandled_error", path=request.url.path, exc_info=exc)
     return JSONResponse(status_code=500, content={"detail": "Internal server error."})
 
 
