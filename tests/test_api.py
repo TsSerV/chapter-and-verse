@@ -1,8 +1,12 @@
+import uuid
+
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from structlog.contextvars import merge_contextvars
 from structlog.testing import capture_logs
 
 from chapter_and_verse.errors import register_error_handlers
+from chapter_and_verse.llm import get_answerer
 from chapter_and_verse.main import app
 
 client = TestClient(app)
@@ -100,3 +104,45 @@ def test_unhandled_error_returns_500_without_traceback() -> None:
     assert response.json() == {"detail": "Internal server error."}
     assert "secret" not in response.text
     assert "Traceback" not in response.text
+
+
+def test_ask_and_health_return_a_request_id() -> None:
+    ask = client.post("/ask", json={"question": "What is the Equality Act 2010?"})
+    health = client.get("/health")
+
+    for response in (ask, health):
+        assert uuid.UUID(response.headers["X-Request-ID"]).version == 4
+
+
+def test_each_request_gets_a_different_request_id() -> None:
+    first = client.post("/ask", json={"question": "What is the Equality Act 2010?"})
+    second = client.post("/ask", json={"question": "What is the Equality Act 2010?"})
+
+    assert first.headers["X-Request-ID"] != second.headers["X-Request-ID"]
+
+
+def test_ask_log_line_has_the_request_id() -> None:
+    # capture_logs replaces all processors, so add back the one that adds request_id.
+    with capture_logs(processors=[merge_contextvars]) as logs:
+        response = client.post(
+            "/ask", json={"question": "What is the Equality Act 2010?"}
+        )
+
+    assert [entry["request_id"] for entry in logs] == [response.headers["X-Request-ID"]]
+
+
+def test_unhandled_error_keeps_the_request_id() -> None:
+    async def broken(question: str) -> str:
+        raise RuntimeError("a bug")
+
+    app.dependency_overrides[get_answerer] = lambda: broken
+
+    with capture_logs(processors=[merge_contextvars]) as logs:
+        response = TestClient(app, raise_server_exceptions=False).post(
+            "/ask", json={"question": "What is the Equality Act 2010?"}
+        )
+
+    assert response.status_code == 500
+    request_id = response.headers["X-Request-ID"]
+    assert [entry["event"] for entry in logs] == ["ask", "unhandled_error"]
+    assert all(entry["request_id"] == request_id for entry in logs)

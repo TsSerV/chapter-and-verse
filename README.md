@@ -51,6 +51,9 @@ The reply looks like this:
 {"answer": "On 25 May 2018.", "latency_ms": 1432}
 ```
 
+Every response also has an `X-Request-ID` header. The log lines for that request carry
+the same value as `request_id`, so quote it when you report a problem.
+
 Interactive API docs are at http://127.0.0.1:8000/docs.
 
 ### Settings
@@ -90,6 +93,7 @@ src/chapter_and_verse/   the package
   llm.py                 the Claude call, behind a small Answerer type
   config.py              settings read from the environment
   errors.py              exception types and the handlers that hide internals
+  middleware.py          gives each request an ID for the logs and a header
 tests/                   one test file per module, plus shared fixtures
 .github/workflows/       CI
 ```
