@@ -3,6 +3,8 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from structlog.typing import FilteringBoundLogger
 
+from chapter_and_verse.middleware import REQUEST_ID_HEADER
+
 logger: FilteringBoundLogger = structlog.get_logger()
 
 
@@ -23,7 +25,13 @@ async def upstream_unavailable_handler(
 async def unhandled_error_handler(request: Request, exc: Exception) -> JSONResponse:
     # Full traceback goes to the log, never to the client.
     logger.exception("unhandled_error", path=request.url.path, exc_info=exc)
-    return JSONResponse(status_code=500, content={"detail": "Internal server error."})
+    # Starlette runs this outside all middleware, so it adds the ID header itself.
+    request_id = structlog.contextvars.get_contextvars().get("request_id")
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Internal server error."},
+        headers={REQUEST_ID_HEADER: request_id} if request_id else None,
+    )
 
 
 def register_error_handlers(app: FastAPI) -> None:

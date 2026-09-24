@@ -11,6 +11,7 @@ from structlog.typing import FilteringBoundLogger
 from chapter_and_verse.config import get_settings
 from chapter_and_verse.errors import register_error_handlers
 from chapter_and_verse.llm import Answerer, get_answerer
+from chapter_and_verse.middleware import add_request_id
 from chapter_and_verse.models import (
     AskRequest,
     AskResponse,
@@ -25,6 +26,8 @@ def configure_logging() -> None:
     # One JSON object per line, with a level and a UTC timestamp.
     structlog.configure(
         processors=[
+            # Adds the request_id that middleware.py binds.
+            structlog.contextvars.merge_contextvars,
             structlog.processors.add_log_level,
             structlog.processors.TimeStamper(fmt="iso"),
             structlog.processors.format_exc_info,
@@ -52,6 +55,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 register_error_handlers(app)
+app.middleware("http")(add_request_id)
 
 
 @app.get("/health")
