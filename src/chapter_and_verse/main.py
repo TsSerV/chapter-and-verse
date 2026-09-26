@@ -60,7 +60,7 @@ app.middleware("http")(add_request_id)
 
 @app.get("/health")
 def health() -> HealthResponse:
-    # Cheap on purpose: this becomes a Kubernetes probe. It logs nothing.
+    # This becomes a Kubernetes probe, so it stays cheap and logs nothing.
     return HealthResponse(status="ok")
 
 
