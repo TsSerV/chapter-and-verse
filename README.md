@@ -8,10 +8,14 @@ If no provision supports a claim, it will not answer.
 
 ## Status
 
-Early. Currently an HTTP API with two endpoints. `POST /ask` sends the question straight
-to Claude and returns the reply. `GET /health` reports that the process can serve
-requests. There is no legislation corpus, no retrieval and no citations yet, so the
-answers today are only as good as the model's own knowledge.
+Early. Currently an HTTP API with two endpoints. `POST /ask` sends the question to Claude
+and returns the reply. All requests share one pooled connection to Claude. A call that
+gets no response, such as a timeout or a dropped connection, is retried up to three
+times with backoff. An error status from Claude is not retried. `GET /health` reports
+that the process can serve requests.
+
+There is no legislation corpus, no retrieval and no citations yet, so the answers today
+are only as good as the model's own knowledge.
 
 ## Run it
 
@@ -51,8 +55,15 @@ The reply looks like this:
 {"answer": "On 25 May 2018.", "latency_ms": 1432}
 ```
 
-Every response also has an `X-Request-ID` header. The log lines for that request carry
-the same value as `request_id`, so quote it when you report a problem.
+Logs are structured JSON, one object per line. Every line written during a request has a
+`request_id`, and the response returns the same value in its `X-Request-ID` header, so
+quote it when you report a problem. One `/ask` call logs a line like this:
+
+```json
+{"outcome": "ok", "question_length": 54, "latency_ms": 1432, "event": "ask", "request_id": "5f0c2d1e-8a47-4b8e-9d3a-2e61c7f4b0a9", "level": "info", "timestamp": "2026-09-27T08:01:32.740200Z"}
+```
+
+The question itself is never logged, only its length.
 
 Interactive API docs are at http://127.0.0.1:8000/docs.
 
@@ -88,13 +99,13 @@ request and on every push to `main`.
 
 ```
 src/chapter_and_verse/   the package
-  main.py                FastAPI app and the two endpoints
+  main.py                FastAPI app, startup (client pool, logging), the two endpoints
   models.py              request and response shapes, with input limits
-  llm.py                 the Claude call, behind a small Answerer type
+  llm.py                 the Claude call and its retries, behind a small Answerer type
   config.py              settings read from the environment
   errors.py              exception types and the handlers that hide internals
   middleware.py          gives each request an ID for the logs and a header
-tests/                   one test file per module, plus shared fixtures
+tests/                   tests per module, a concurrency test, shared fixtures
 .github/workflows/       CI
 ```
 
