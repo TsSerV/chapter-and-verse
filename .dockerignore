@@ -1,0 +1,9 @@
+# Allowlist. The build sees only these, so .env and any new secret file stay out.
+*
+!src
+!pyproject.toml
+!uv.lock
+!.python-version
+# pyproject.toml names it, so the package build needs it.
+!README.md
+**/__pycache__
