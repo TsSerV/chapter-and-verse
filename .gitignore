@@ -15,3 +15,7 @@ notes/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+
+# Local SQLite database
+*.db
+*.db-journal

@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     claude_api_token: SecretStr
     claude_model: str = "claude-haiku-4-5"
     claude_timeout_seconds: float = 60.0
+    database_url: str = "sqlite+aiosqlite:///./chapter_and_verse.db"
 
 
 @lru_cache
