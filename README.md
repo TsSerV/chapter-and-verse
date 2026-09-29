@@ -76,6 +76,7 @@ Read from the environment, or from `.env`. The environment wins.
 | `CLAUDE_API_TOKEN` | yes | none | Your Claude API key. |
 | `CLAUDE_MODEL` | no | `claude-haiku-4-5` | Which model answers. |
 | `CLAUDE_TIMEOUT_SECONDS` | no | `60.0` | How long to wait for Claude. |
+| `DATABASE_URL` | no | `sqlite+aiosqlite:///./chapter_and_verse.db` | Which database to use. |
 
 ## Test it
 
@@ -99,9 +100,10 @@ request and on every push to `main`.
 
 ```
 src/chapter_and_verse/   the package
-  main.py                FastAPI app, startup (client pool, logging), the two endpoints
+  main.py                FastAPI app, startup (client pool, database, logging), the two endpoints
   models.py              request and response shapes, with input limits
   llm.py                 the Claude call and its retries, behind a small Answerer type
+  db.py                  the answers table and a database session per request
   config.py              settings read from the environment
   errors.py              exception types and the handlers that hide internals
   middleware.py          gives each request an ID for the logs and a header

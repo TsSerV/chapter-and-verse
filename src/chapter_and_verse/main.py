@@ -6,6 +6,7 @@ from typing import Annotated
 import httpx
 import structlog
 from fastapi import Depends, FastAPI
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from structlog.typing import FilteringBoundLogger
 
 from chapter_and_verse.config import get_settings
@@ -39,14 +40,20 @@ def configure_logging() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     configure_logging()
-    # One pooled client for the whole process, closed on shutdown.
+    # One database pool and one HTTP client for the whole process, closed on shutdown.
     settings = get_settings()
-    async with httpx.AsyncClient(
-        timeout=settings.claude_timeout_seconds,
-        limits=httpx.Limits(max_connections=20, max_keepalive_connections=5),
-    ) as client:
-        app.state.http_client = client
-        yield
+    engine = create_async_engine(settings.database_url)
+    # Values stay loaded after commit. A hidden reload query would fail under asyncio.
+    app.state.sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with httpx.AsyncClient(
+            timeout=settings.claude_timeout_seconds,
+            limits=httpx.Limits(max_connections=20, max_keepalive_connections=5),
+        ) as client:
+            app.state.http_client = client
+            yield
+    finally:
+        await engine.dispose()
 
 
 app = FastAPI(
