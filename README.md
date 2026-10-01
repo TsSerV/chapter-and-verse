@@ -8,11 +8,12 @@ If no provision supports a claim, it will not answer.
 
 ## Status
 
-Early. Currently an HTTP API with two endpoints. `POST /ask` sends the question to Claude
-and returns the reply. All requests share one pooled connection to Claude. A call that
-gets no response, such as a timeout or a dropped connection, is retried up to three
-times with backoff. An error status from Claude is not retried. `GET /health` reports
-that the process can serve requests.
+Early. Currently an HTTP API with three endpoints. `POST /ask` sends the question to
+Claude and returns the reply. All requests share one pooled connection to Claude. A call
+that gets no response, such as a timeout or a dropped connection, is retried up to three
+times with backoff. An error status from Claude is not retried. Every successful answer
+is stored with its question, model and request ID, and `GET /answers/{answer_id}` reads
+it back. `GET /health` reports that the process can serve requests.
 
 There is no legislation corpus, no retrieval and no citations yet, so the answers today
 are only as good as the model's own knowledge.
@@ -35,6 +36,13 @@ own key in it:
 cp .env.example .env
 ```
 
+Create the database. Unless you set `DATABASE_URL`, it is a SQLite file in the project
+folder:
+
+```sh
+uv run alembic upgrade head
+```
+
 Then start the server:
 
 ```sh
@@ -52,8 +60,20 @@ curl -X POST http://127.0.0.1:8000/ask \
 The reply looks like this:
 
 ```json
-{"answer": "On 25 May 2018.", "latency_ms": 1432}
+{"answer_id": 1, "answer": "On 25 May 2018.", "latency_ms": 1432}
 ```
+
+Read the stored answer back by its ID:
+
+```sh
+curl http://127.0.0.1:8000/answers/1
+```
+
+```json
+{"id": 1, "request_id": "5f0c2d1e-8a47-4b8e-9d3a-2e61c7f4b0a9", "question": "When did the Data Protection Act 2018 come into force?", "answer": "On 25 May 2018.", "model": "claude-haiku-4-5", "latency_ms": 1432, "created_at": "2026-09-27T08:01:32"}
+```
+
+An ID that does not exist returns 404.
 
 Logs are structured JSON, one object per line. Every line written during a request has a
 `request_id`, and the response returns the same value in its `X-Request-ID` header, so
@@ -85,7 +105,8 @@ uv run pytest
 ```
 
 The tests never call Claude, so they need no key. Requests to the API are mocked with
-`respx`, and the endpoint tests replace the answerer with a fake.
+`respx`, and the endpoint tests replace the answerer with a fake. Each test gets its own
+SQLite file.
 
 To run the same three checks CI runs:
 
@@ -100,7 +121,7 @@ request and on every push to `main`.
 
 ```
 src/chapter_and_verse/   the package
-  main.py                FastAPI app, startup (client pool, database, logging), the two endpoints
+  main.py                FastAPI app, startup (client pool, database, logging), the endpoints
   models.py              request and response shapes, with input limits
   llm.py                 the Claude call and its retries, behind a small Answerer type
   db.py                  the answers table and a database session per request

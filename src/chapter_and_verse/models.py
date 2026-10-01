@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -14,8 +16,22 @@ class AskRequest(BaseModel):
 
 
 class AskResponse(BaseModel):
+    answer_id: int = Field(description="Use it to read the answer back later.")
     answer: str = Field(description="The answer to the question.")
     latency_ms: int = Field(ge=0, description="Time taken to build the answer.")
+
+
+class AnswerRecord(BaseModel):
+    # Built from an Answer row with AnswerRecord.model_validate(row).
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    request_id: str = Field(description="Matches the X-Request-ID header and the logs.")
+    question: str
+    answer: str
+    model: str = Field(description="The Claude model that wrote the answer.")
+    latency_ms: int = Field(ge=0, description="Time taken to build the answer.")
+    created_at: datetime = Field(description="When the answer was stored.")
 
 
 class HealthResponse(BaseModel):

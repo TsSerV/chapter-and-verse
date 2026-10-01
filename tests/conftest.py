@@ -2,10 +2,12 @@ from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
 
 import pytest
+from pydantic import SecretStr
 from sqlalchemy import create_engine
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
+from chapter_and_verse.config import Settings, get_settings
 from chapter_and_verse.db import Base, get_session
 from chapter_and_verse.llm import get_answerer
 from chapter_and_verse.main import app
@@ -21,6 +23,15 @@ def no_real_llm() -> Iterator[None]:
     app.dependency_overrides[get_answerer] = lambda: fake_answer
     yield
     app.dependency_overrides.clear()
+
+
+@pytest.fixture(autouse=True)
+def test_settings() -> Settings:
+    # Fixed values, so tests pass in CI, which has no .env.
+    settings = Settings(claude_api_token=SecretStr("test-token"), claude_model="test-model")
+    app.dependency_overrides[get_settings] = lambda: settings
+    # no_real_llm clears the override after the test.
+    return settings
 
 
 @pytest.fixture(autouse=True)
