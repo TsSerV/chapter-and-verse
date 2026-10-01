@@ -5,15 +5,17 @@ from typing import Annotated
 
 import httpx
 import structlog
-from fastapi import Depends, FastAPI
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from fastapi import Depends, FastAPI, HTTPException
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from structlog.typing import FilteringBoundLogger
 
-from chapter_and_verse.config import get_settings
+from chapter_and_verse.config import Settings, get_settings
+from chapter_and_verse.db import Answer, get_session
 from chapter_and_verse.errors import register_error_handlers
 from chapter_and_verse.llm import Answerer, get_answerer
 from chapter_and_verse.middleware import add_request_id
 from chapter_and_verse.models import (
+    AnswerRecord,
     AskRequest,
     AskResponse,
     ErrorResponse,
@@ -78,7 +80,10 @@ def health() -> HealthResponse:
     },
 )
 async def ask(
-    request: AskRequest, answer: Annotated[Answerer, Depends(get_answerer)]
+    request: AskRequest,
+    answer: Annotated[Answerer, Depends(get_answerer)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+    settings: Annotated[Settings, Depends(get_settings)],
 ) -> AskResponse:
     start = time.perf_counter()
     # The question is user input, so only its length is logged.
@@ -99,7 +104,30 @@ async def ask(
         question_length=len(request.question),
         latency_ms=latency_ms,
     )
-    return AskResponse(answer=text, latency_ms=latency_ms)
+    # Only successful answers are stored. A failed call is in the log with its request ID.
+    row = Answer(
+        request_id=structlog.contextvars.get_contextvars()["request_id"],
+        question=request.question,
+        answer=text,
+        model=settings.claude_model,
+        latency_ms=latency_ms,
+    )
+    session.add(row)
+    await session.commit()
+    return AskResponse(answer_id=row.id, answer=text, latency_ms=latency_ms)
+
+
+@app.get(
+    "/answers/{answer_id}",
+    responses={404: {"model": ErrorResponse, "description": "No answer with this ID."}},
+)
+async def get_answer(
+    answer_id: int, session: Annotated[AsyncSession, Depends(get_session)]
+) -> AnswerRecord:
+    row = await session.get(Answer, answer_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Answer not found.")
+    return AnswerRecord.model_validate(row)
 
 
 def elapsed_ms(start: float) -> int:
