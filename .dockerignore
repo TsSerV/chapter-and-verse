@@ -6,4 +6,7 @@
 !.python-version
 # pyproject.toml names it, so the package build needs it.
 !README.md
+# For the migrate job in compose.yaml.
+!alembic.ini
+!migrations
 **/__pycache__

@@ -23,6 +23,10 @@ WORKDIR /app
 COPY --from=builder /app/.venv /app/.venv
 ENV PATH="/app/.venv/bin:$PATH"
 
+# `alembic upgrade head` runs from /app, where it finds alembic.ini.
+COPY alembic.ini ./
+COPY migrations ./migrations
+
 USER 999:999
 EXPOSE 8000
 
