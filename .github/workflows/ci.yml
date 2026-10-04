@@ -25,3 +25,16 @@ jobs:
       - run: uv run ruff check src tests migrations
       - run: uv run mypy src
       - run: uv run pytest
+
+  image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Build only, nothing is pushed.
+      - run: docker build -t chapter-and-verse:ci .
+      # An image can build and still fail to start, for example with a broken .venv.
+      - run: docker run --rm chapter-and-verse:ci python -c "import chapter_and_verse.main"

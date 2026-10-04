@@ -11,6 +11,31 @@ updates:
         patterns: ["*"]
         update-types: ["minor", "patch"]
 
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "chore"
+    groups:
+      images:
+        patterns: ["*"]
+    ignore:
+      # A new Python version also changes .python-version and the builder image.
+      - dependency-name: "python"
+        update-types: ["version-update:semver-minor"]
+
+  - package-ecosystem: "docker-compose"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "chore"
+    ignore:
+      # A new major version cannot read the old data volume without pg_upgrade.
+      - dependency-name: "postgres"
+        update-types: ["version-update:semver-major"]
+
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
