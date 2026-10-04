@@ -12,28 +12,49 @@ Early. Currently an HTTP API with three endpoints. `POST /ask` sends the questio
 Claude and returns the reply. All requests share one pooled connection to Claude. A call
 that gets no response, such as a timeout or a dropped connection, is retried up to three
 times with backoff. An error status from Claude is not retried. Every successful answer
-is stored with its question, model and request ID, and `GET /answers/{answer_id}` reads
-it back. `GET /health` reports that the process can serve requests.
+is stored with its question, model, latency and request ID, and
+`GET /answers/{answer_id}` reads it back. `GET /health` reports that the process can
+serve requests.
 
 There is no legislation corpus, no retrieval and no citations yet, so the answers today
 are only as good as the model's own knowledge.
 
 ## Run it
 
-You need [uv](https://docs.astral.sh/uv/getting-started/installation/). It installs
-Python 3.13 for you.
+Clone the repository and copy the example settings file:
 
 ```sh
 git clone https://github.com/TsSerV/chapter-and-verse.git
 cd chapter-and-verse
-uv sync
+cp .env.example .env
 ```
 
-`POST /ask` calls the Claude API, so it needs a key. Copy the example file and put your
-own key in it:
+`POST /ask` calls the Claude API, so put your own key in `.env` as `CLAUDE_API_TOKEN`.
+
+### With Docker Compose
+
+This is the quickest way to run everything. You need
+[Docker with Compose](https://docs.docker.com/compose/install/). It runs the API with
+Postgres, the database it will use when deployed.
+
+Set `POSTGRES_PASSWORD` in `.env` to a new password of letters and digits, for example
+from `openssl rand -hex 24`. Then:
 
 ```sh
-cp .env.example .env
+docker compose up --build
+```
+
+Compose starts Postgres and waits until it is healthy. Then it applies the migrations and
+starts the API. The data stays in a Docker volume between runs. `docker compose down -v`
+deletes it.
+
+### With uv, for development
+
+You need [uv](https://docs.astral.sh/uv/getting-started/installation/). It installs
+Python 3.13 for you.
+
+```sh
+uv sync
 ```
 
 Create the database. Unless you set `DATABASE_URL`, it is a SQLite file in the project
@@ -43,13 +64,15 @@ folder:
 uv run alembic upgrade head
 ```
 
-Then start the server:
+Then start the server. `--reload` restarts it when you change the code:
 
 ```sh
 uv run uvicorn chapter_and_verse.main:app --reload
 ```
 
-Ask it something:
+### Ask it something
+
+Both ways serve the API on port 8000, reachable only from your own machine.
 
 ```sh
 curl -X POST http://127.0.0.1:8000/ask \
@@ -96,7 +119,8 @@ Read from the environment, or from `.env`. The environment wins.
 | `CLAUDE_API_TOKEN` | yes | none | Your Claude API key. |
 | `CLAUDE_MODEL` | no | `claude-haiku-4-5` | Which model answers. |
 | `CLAUDE_TIMEOUT_SECONDS` | no | `60.0` | How long to wait for Claude. |
-| `DATABASE_URL` | no | `sqlite+aiosqlite:///./chapter_and_verse.db` | Which database to use. |
+| `DATABASE_URL` | no | `sqlite+aiosqlite:///./chapter_and_verse.db` | Which database to use. Compose sets it to its own Postgres. |
+| `POSTGRES_PASSWORD` | with compose | none | Password for the Postgres container. Only compose uses it. |
 
 ## Test it
 
@@ -115,7 +139,8 @@ make check
 ```
 
 That is `ruff check`, `mypy` in strict mode, then `pytest`. CI runs them on every pull
-request and on every push to `main`.
+request and on every push to `main`. CI also builds the Docker image and imports the app
+inside it, so a change that breaks the image fails too.
 
 ## Layout
 
@@ -129,7 +154,10 @@ src/chapter_and_verse/   the package
   errors.py              exception types and the handlers that hide internals
   middleware.py          gives each request an ID for the logs and a header
 tests/                   tests per module, a concurrency test, shared fixtures
-.github/workflows/       CI
+migrations/              Alembic migrations, one file per schema change
+Dockerfile               two-stage image that runs as a non-root user
+compose.yaml             Postgres, then the migrations, then the API
+.github/workflows/       CI: the checks and the image build
 ```
 
 ## License
