@@ -1,8 +1,7 @@
-# migrate and api run the same image with the same settings.
+# migrate and api run the same image against the same database.
 x-app: &app
   build: .
   image: chapter-and-verse:dev
-  env_file: .env
   environment:
     DATABASE_URL: postgresql+asyncpg://postgres:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/postgres
 
@@ -31,6 +30,8 @@ services:
 
   api:
     <<: *app
+    # Only the API calls Claude, so only it gets the key in .env.
+    env_file: .env
     ports:
       # Local machine only, so no one else on the network can spend the Claude key.
       - "127.0.0.1:8000:8000"

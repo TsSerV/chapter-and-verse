@@ -6,7 +6,7 @@ from sqlalchemy import pool
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import create_async_engine
 
-from chapter_and_verse.config import get_settings
+from chapter_and_verse.config import DatabaseSettings
 from chapter_and_verse.db import Base
 
 config = context.config
@@ -17,7 +17,7 @@ if config.config_file_name is not None:
 # Autogenerate compares the database with these models.
 target_metadata = Base.metadata
 # From Settings, not alembic.ini. The ini parser would also break on a % in a password.
-database_url = get_settings().database_url
+database_url = DatabaseSettings().database_url
 
 
 def run_migrations_offline() -> None:
