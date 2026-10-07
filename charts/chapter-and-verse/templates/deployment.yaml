@@ -1,0 +1,36 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}
+  labels:
+    {{- include "cav.labels" . | nindent 4 }}
+    app.kubernetes.io/component: api
+spec:
+  replicas: {{ .Values.replicas }}
+  selector:
+    matchLabels:
+      {{- include "cav.labels" . | nindent 6 }}
+      app.kubernetes.io/component: api
+  template:
+    metadata:
+      labels:
+        {{- include "cav.labels" . | nindent 8 }}
+        app.kubernetes.io/component: api
+    spec:
+      containers:
+        - name: api
+          {{- include "cav.image" . | nindent 10 }}
+          ports:
+            - name: http
+              containerPort: 8000
+          env:
+            {{- include "cav.databaseEnv" . | nindent 12 }}
+            - name: CLAUDE_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.claude.secretName }}
+                  key: CLAUDE_API_TOKEN
+            - name: CLAUDE_MODEL
+              value: {{ .Values.claude.model | quote }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}

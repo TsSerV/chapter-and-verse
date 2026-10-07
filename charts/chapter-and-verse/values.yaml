@@ -1,0 +1,28 @@
+image:
+  repository: chapter-and-verse
+  tag: dev
+  # kind gets the image from `kind load`, not from a registry.
+  pullPolicy: IfNotPresent
+
+replicas: 2
+
+claude:
+  model: claude-haiku-4-5
+  secretName: claude-api
+
+database:
+  host: postgres
+  port: 5432
+  name: postgres
+  user: postgres
+  passwordSecret:
+    name: postgres
+    key: password
+
+# For the API pods and the migration Job.
+resources:
+  requests:
+    cpu: 100m
+    memory: 192Mi
+  limits:
+    memory: 256Mi

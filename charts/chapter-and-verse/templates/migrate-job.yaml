@@ -1,0 +1,31 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ .Release.Name }}-migrate
+  labels:
+    {{- include "cav.labels" . | nindent 4 }}
+    app.kubernetes.io/component: migrate
+  annotations:
+    # Runs before the API pods start, on install and on every upgrade.
+    helm.sh/hook: pre-install,pre-upgrade
+    # Keeps the last run, so its logs stay readable. The next run replaces it.
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  backoffLimit: 2
+  activeDeadlineSeconds: 300
+  template:
+    metadata:
+      labels:
+        {{- include "cav.labels" . | nindent 8 }}
+        app.kubernetes.io/component: migrate
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: migrate
+          {{- include "cav.image" . | nindent 10 }}
+          command: ["alembic", "upgrade", "head"]
+          # Only the database env. Migrations never see the Claude key.
+          env:
+            {{- include "cav.databaseEnv" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
