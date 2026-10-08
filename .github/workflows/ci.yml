@@ -38,3 +38,13 @@ jobs:
       - run: docker build -t chapter-and-verse:ci .
       # An image can build and still fail to start, for example with a broken .venv.
       - run: docker run --rm chapter-and-verse:ci python -c "import chapter_and_verse.main"
+
+  chart:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - run: helm lint --strict charts/chapter-and-verse

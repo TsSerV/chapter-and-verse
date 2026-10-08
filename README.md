@@ -70,9 +70,74 @@ Then start the server. `--reload` restarts it when you change the code:
 uv run uvicorn chapter_and_verse.main:app --reload
 ```
 
+### On Kubernetes, with kind
+
+This runs the service on a local Kubernetes cluster, the same way it runs when deployed.
+You need Docker, [kind](https://kind.sigs.k8s.io/docs/user/quick-start/#installation),
+[kubectl](https://kubernetes.io/docs/tasks/tools/) and
+[Helm 4](https://helm.sh/docs/intro/install/). Set `POSTGRES_PASSWORD` in `.env` as for
+compose.
+
+Create the cluster and a namespace:
+
+```sh
+kind create cluster --name chapter-and-verse
+kubectl create namespace chapter-and-verse
+kubectl config set-context --current --namespace chapter-and-verse
+```
+
+Create two Secrets from `.env`, one value in each. Only the API pods read the Claude key.
+The migrations get the database password only.
+
+```sh
+kubectl create secret generic postgres \
+  --from-literal=password="$(grep '^POSTGRES_PASSWORD=' .env | cut -d= -f2-)"
+kubectl create secret generic claude-api \
+  --from-literal=CLAUDE_API_TOKEN="$(grep '^CLAUDE_API_TOKEN=' .env | cut -d= -f2-)"
+```
+
+Start Postgres. `deploy/kind/postgres.yaml` is for a local cluster only. A deployed
+service uses a managed database.
+
+```sh
+kubectl apply -f deploy/kind/postgres.yaml
+kubectl rollout status statefulset/postgres
+```
+
+Build the image and load it into the cluster. The kind node cannot see your local Docker
+images:
+
+```sh
+docker build -t chapter-and-verse:dev .
+kind load docker-image chapter-and-verse:dev --name chapter-and-verse
+```
+
+Install the chart:
+
+```sh
+helm upgrade --install chapter-and-verse charts/chapter-and-verse --wait
+```
+
+A Job applies the migrations first, then two API pods start. They run as a non-root user
+with a read-only filesystem and pass the restricted Pod Security Standard. When a pod
+stops, it finishes the requests it already has.
+
+After a new build, load it again and run the same `helm upgrade` line to apply any new
+migrations. Then run `kubectl rollout restart deployment/chapter-and-verse`. The tag
+stays `dev`, so without the restart the pods keep the old image.
+
+To reach the API, keep this running in its own terminal:
+
+```sh
+kubectl port-forward svc/chapter-and-verse 8000:8000
+```
+
+`kind delete cluster --name chapter-and-verse` removes everything, the stored answers
+included.
+
 ### Ask it something
 
-Both ways serve the API on port 8000, reachable only from your own machine.
+All three ways serve the API on port 8000, reachable only from your own machine.
 
 ```sh
 curl -X POST http://127.0.0.1:8000/ask \
@@ -112,7 +177,8 @@ Interactive API docs are at http://127.0.0.1:8000/docs.
 
 ### Settings
 
-Read from the environment, or from `.env`. The environment wins.
+Read from the environment, or from `.env`. The environment wins. On kind, the chart sets
+them from `values.yaml` and the two Secrets.
 
 | Name | Required | Default | What it does |
 | --- | --- | --- | --- |
@@ -120,7 +186,7 @@ Read from the environment, or from `.env`. The environment wins.
 | `CLAUDE_MODEL` | no | `claude-haiku-4-5` | Which model answers. |
 | `CLAUDE_TIMEOUT_SECONDS` | no | `60.0` | How long to wait for Claude. |
 | `DATABASE_URL` | no | `sqlite+aiosqlite:///./chapter_and_verse.db` | Which database to use. Compose sets it to its own Postgres. |
-| `POSTGRES_PASSWORD` | with compose | none | Password for the Postgres container. Only compose uses it. |
+| `POSTGRES_PASSWORD` | with compose or kind | none | Password for Postgres. Compose passes it to its container. On kind, it goes into the `postgres` Secret. |
 
 ## Test it
 
@@ -140,7 +206,8 @@ make check
 
 That is `ruff check`, `mypy` in strict mode, then `pytest`. CI runs them on every pull
 request and on every push to `main`. CI also builds the Docker image and imports the app
-inside it, so a change that breaks the image fails too.
+inside it, so a change that breaks the image fails too. It also runs
+`helm lint --strict` on the chart.
 
 ## Layout
 
@@ -157,7 +224,9 @@ tests/                   tests per module, a concurrency test, shared fixtures
 migrations/              Alembic migrations, one file per schema change
 Dockerfile               two-stage image that runs as a non-root user
 compose.yaml             Postgres, then the migrations, then the API
-.github/workflows/       CI: the checks and the image build
+charts/                  Helm chart: migrations as a Job, then the API and its Service
+deploy/kind/             Postgres for a local kind cluster only
+.github/workflows/       CI: the checks, the image build and the chart lint
 ```
 
 ## License

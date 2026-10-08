@@ -17,12 +17,34 @@ spec:
         {{- include "cav.labels" . | nindent 8 }}
         app.kubernetes.io/component: api
     spec:
+      # The preStop sleep plus one Claude call at its full timeout.
+      terminationGracePeriodSeconds: 75
+      securityContext:
+        {{- include "cav.podSecurity" . | nindent 8 }}
       containers:
         - name: api
           {{- include "cav.image" . | nindent 10 }}
+          securityContext:
+            {{- include "cav.containerSecurity" . | nindent 12 }}
           ports:
             - name: http
               containerPort: 8000
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 5
+          # Checks only the process. A database outage must not restart every pod.
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+          lifecycle:
+            preStop:
+              # Keeps serving while the Service stops sending new requests here.
+              sleep:
+                seconds: 5
           env:
             {{- include "cav.databaseEnv" . | nindent 12 }}
             - name: CLAUDE_API_TOKEN
