@@ -19,3 +19,17 @@ imagePullPolicy: {{ .Values.image.pullPolicy }}
 - name: DATABASE_URL
   value: "postgresql+asyncpg://{{ .Values.database.user }}:$(DB_PASSWORD)@{{ .Values.database.host }}:{{ .Values.database.port }}/{{ .Values.database.name }}"
 {{- end }}
+
+{{/* Passes the restricted Pod Security Standard. */}}
+{{- define "cav.podSecurity" -}}
+runAsNonRoot: true
+seccompProfile:
+  type: RuntimeDefault
+{{- end }}
+
+{{- define "cav.containerSecurity" -}}
+allowPrivilegeEscalation: false
+readOnlyRootFilesystem: true
+capabilities:
+  drop: ["ALL"]
+{{- end }}

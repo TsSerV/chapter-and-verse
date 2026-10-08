@@ -20,10 +20,14 @@ spec:
         app.kubernetes.io/component: migrate
     spec:
       restartPolicy: Never
+      securityContext:
+        {{- include "cav.podSecurity" . | nindent 8 }}
       containers:
         - name: migrate
           {{- include "cav.image" . | nindent 10 }}
           command: ["alembic", "upgrade", "head"]
+          securityContext:
+            {{- include "cav.containerSecurity" . | nindent 12 }}
           # Only the database env. Migrations never see the Claude key.
           env:
             {{- include "cav.databaseEnv" . | nindent 12 }}
