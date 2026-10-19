@@ -19,3 +19,8 @@ notes/
 # Local SQLite database
 *.db
 *.db-journal
+
+# Terraform state and caches. The lock file is committed.
+.terraform/
+*.tfstate
+*.tfstate.*
