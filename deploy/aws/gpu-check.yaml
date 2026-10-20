@@ -1,0 +1,21 @@
+# Runs nvidia-smi once on the GPU node: driver, device plugin and scheduling in one check.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: gpu-check
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: NoSchedule
+      containers:
+        - name: nvidia-smi
+          image: public.ecr.aws/amazonlinux/amazonlinux:2023-minimal
+          command: ["nvidia-smi"]
+          resources:
+            limits:
+              nvidia.com/gpu: 1
