@@ -57,8 +57,9 @@ module "eks" {
 
     gpu = {
       # The NVIDIA AMI has the driver. The device plugin is installed separately.
-      ami_type       = "AL2023_x86_64_NVIDIA"
-      instance_types = ["g6.xlarge"]
+      ami_type = "AL2023_x86_64_NVIDIA"
+      # Two sizes with the same L4 GPU. When one is out of capacity, the other can launch.
+      instance_types = ["g6.xlarge", "g6.2xlarge"]
       capacity_type  = "SPOT"
       min_size       = 0
       max_size       = 1
