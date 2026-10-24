@@ -1,0 +1,92 @@
+# vLLM serving one open model on the GPU node. Weights download from Hugging Face at start.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vllm
+  labels:
+    app.kubernetes.io/name: vllm
+spec:
+  replicas: 1
+  # One GPU: the old pod must stop before a new one can get it.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: vllm
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: vllm
+    spec:
+      # A Service named vllm would inject VLLM_PORT, which vLLM reads as its own setting.
+      enableServiceLinks: false
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: NoSchedule
+      containers:
+        - name: vllm
+          image: vllm/vllm-openai:v0.31.0
+          command: ["vllm", "serve"]
+          # $(MODEL) comes from env, so switching models is one kubectl command.
+          args:
+            - "$(MODEL)"
+            - "--max-model-len=8192"
+            - "--reasoning-parser=qwen3"
+          env:
+            - name: MODEL
+              value: Qwen/Qwen3-1.7B
+          ports:
+            - name: http
+              containerPort: 8000
+          resources:
+            requests:
+              cpu: "3"
+              memory: 12Gi
+            limits:
+              memory: 14Gi
+              nvidia.com/gpu: 1
+          # Download and load take minutes. Liveness only starts once this passes.
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+            failureThreshold: 60
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+          volumeMounts:
+            - name: shm
+              mountPath: /dev/shm
+            - name: hf-cache
+              mountPath: /root/.cache/huggingface
+      volumes:
+        # vLLM's worker processes share tensors through /dev/shm.
+        - name: shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 2Gi
+        - name: hf-cache
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vllm
+  labels:
+    app.kubernetes.io/name: vllm
+spec:
+  selector:
+    app.kubernetes.io/name: vllm
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http
