@@ -48,3 +48,22 @@ jobs:
           persist-credentials: false
 
       - run: helm lint --strict charts/chapter-and-verse
+
+  terraform:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: "1.16.7"
+          # The wrapper only adds step outputs, and no step reads them.
+          terraform_wrapper: false
+
+      - run: terraform fmt -check -recursive infra
+      # No state and no AWS credentials. The lock file is used as committed.
+      - run: terraform -chdir=infra/aws init -backend=false -input=false -lockfile=readonly
+      - run: terraform -chdir=infra/aws validate

@@ -16,6 +16,9 @@ is stored with its question, model, latency and request ID, and
 `GET /answers/{answer_id}` reads it back. `GET /health` reports that the process can
 serve requests.
 
+Open models now run on a GPU in AWS, served by vLLM on an EKS cluster that exists only
+while it is in use. `/ask` does not use them yet. It still calls Claude.
+
 There is no legislation corpus, no retrieval and no citations yet, so the answers today
 are only as good as the model's own knowledge.
 
@@ -135,9 +138,161 @@ kubectl port-forward svc/chapter-and-verse 8000:8000
 `kind delete cluster --name chapter-and-verse` removes everything, the stored answers
 included.
 
+### On AWS, with a GPU
+
+This serves an open model on an NVIDIA L4 GPU with [vLLM](https://docs.vllm.ai/), through
+an OpenAI compatible API. The service does not use it yet: `/ask` still calls Claude.
+
+Terraform in `infra/aws/` creates an EKS cluster in eu-west-2 (London) with two nodes: an
+ARM `t4g.medium` for the system pods, and one spot NVIDIA L4 for models. Only pods that
+tolerate the GPU node's taint run there. The cluster is built to be destroyed after each
+session, and nothing in it keeps data.
+
+There is no NAT gateway, because it charges by the hour and for every GB of image and
+weights. The nodes are in public subnets instead, and their security group blocks inbound
+traffic from the internet. The Kubernetes API accepts one IP address only.
+
+#### What it costs
+
+London prices in US dollars, checked in October 2026. Spot prices change.
+
+| Part | Per hour |
+| --- | --- |
+| EKS control plane | $0.10 |
+| GPU node, `g6.xlarge` on spot | $0.35 to $0.41 |
+| GPU node, `g6.2xlarge` on spot | about $0.19 |
+| System node, `t4g.medium` | $0.04 |
+
+Both GPU sizes have the same L4, and the node group takes whichever has spot capacity.
+With the GPU node running, the cluster costs $0.33 to $0.55 an hour, plus a few cents for
+disks and public IP addresses.
+
+**Run `terraform destroy` at the end of every session.** Left running, the cluster costs
+$8 to $14 a day.
+
+#### What you need
+
+- An AWS account where you can create IAM roles, a VPC and an EKS cluster.
+- Quota for spot G instances in eu-west-2. New accounts start at 0. In Service Quotas,
+  [request](https://docs.aws.amazon.com/servicequotas/latest/userguide/request-quota-increase.html)
+  8 vCPUs for "All G and VT Spot Instance Requests", so either size can launch. Approval
+  can take a day or two.
+- The [AWS CLI v2](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html),
+  signed in to that account. `aws sts get-caller-identity` shows which account it uses.
+- [Terraform 1.16](https://developer.hashicorp.com/terraform/install), and kubectl and
+  Helm 4 as for kind.
+
+#### Create it
+
+Run every command from the repository root. `admin_cidr` is your current public IP
+address, the only one the Kubernetes API will accept:
+
+```sh
+export TF_VAR_admin_cidr="$(curl -s https://checkip.amazonaws.com)/32"
+terraform -chdir=infra/aws init
+terraform -chdir=infra/aws apply -var gpu_nodes=1
+```
+
+The apply takes about 12 minutes. Set `gpu_nodes` when you create the cluster, because the
+node group ignores later changes to it. Keep `TF_VAR_admin_cidr` set in this terminal:
+`destroy` needs it too. If your IP address changes, kubectl times out. Export
+`TF_VAR_admin_cidr` again and run the same apply.
+
+When London has no spot L4 capacity, the GPU node group fails after about 30 minutes. The
+control plane and the system node still cost money, so run `terraform destroy` and try
+again later.
+
+Point kubectl at the cluster, then install the NVIDIA device plugin. The node's AMI brings
+the NVIDIA driver, and the plugin makes the GPU visible to Kubernetes as `nvidia.com/gpu`:
+
+```sh
+eval "$(terraform -chdir=infra/aws output -raw kubeconfig_command)"
+helm install nvdp nvidia-device-plugin --repo https://nvidia.github.io/k8s-device-plugin \
+  --version 0.20.1 --namespace nvidia --create-namespace
+```
+
+Check that a pod can use the GPU. This Job runs `nvidia-smi` once:
+
+```sh
+kubectl apply -f deploy/aws/gpu-check.yaml
+kubectl wait --for=condition=complete job/gpu-check --timeout=180s
+kubectl logs job/gpu-check
+```
+
+The log shows an NVIDIA L4 with 23,034 MiB of memory.
+
+#### Serve a model
+
+```sh
+kubectl apply -f deploy/aws/vllm.yaml
+kubectl rollout status deployment/vllm --timeout=15m
+```
+
+It serves Qwen3-1.7B. The first start takes about 6 minutes, most of it the image pull. To
+serve another model, change one value, for example
+`kubectl set env deployment/vllm MODEL=Qwen/Qwen3-8B-FP8`.
+
+To reach it, keep this running in its own terminal:
+
+```sh
+kubectl port-forward svc/vllm 8000:8000
+```
+
+Then send a chat request. `model` must be the model being served, which
+`curl http://127.0.0.1:8000/v1/models` shows:
+
+```sh
+curl http://127.0.0.1:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model": "Qwen/Qwen3-1.7B",
+       "messages": [{"role": "user", "content": "In one sentence, what does the Equality Act 2010 do?"}],
+       "max_tokens": 300,
+       "chat_template_kwargs": {"enable_thinking": false}}'
+```
+
+The answer is in `choices[0].message.content`. `enable_thinking: false` skips Qwen3's
+thinking step, so the answer comes back sooner.
+
+#### Destroy it
+
+```sh
+terraform -chdir=infra/aws destroy
+kubectl config delete-context eks-chapter-and-verse
+```
+
+The destroy takes about 11 minutes. Then check that the region has no cluster, instance or
+disk left. In an account used only for this, each command prints an empty list:
+
+```sh
+aws eks list-clusters --region eu-west-2 --query clusters
+aws ec2 describe-instances --region eu-west-2 \
+  --filters Name=instance-state-name,Values=pending,running,stopping \
+  --query 'Reservations[].Instances[].InstanceId'
+aws ec2 describe-volumes --region eu-west-2 --query 'Volumes[].VolumeId'
+```
+
+#### How long a start takes
+
+Measured on 24 October 2026 with Qwen3-1.7B, on a spot `g6.2xlarge`:
+
+| Stage | Seconds |
+| --- | --- |
+| `terraform apply` until the GPU node is Ready | 632 |
+| Image pull, 9 GB | 230 |
+| Weights download | 19 |
+| Weights load onto the GPU | 13 |
+| Engine start: memory profile, KV cache, warm up | 50 |
+
+Most of the apply is the control plane: the GPU node was Ready 105 seconds after its node
+group was created. `torch.compile` takes 34 of the 50 seconds of engine start. From
+`kubectl apply` to a Ready pod took 6 minutes 10 seconds.
+
+Nothing is cached between pods, so each new pod downloads the weights and compiles again.
+On the same node, it does not pull the image again.
+
 ### Ask it something
 
-All three ways serve the API on port 8000, reachable only from your own machine.
+Compose, uv and kind all serve the API on port 8000, reachable only from your own machine.
 
 ```sh
 curl -X POST http://127.0.0.1:8000/ask \
@@ -207,7 +362,8 @@ make check
 That is `ruff check`, `mypy` in strict mode, then `pytest`. CI runs them on every pull
 request and on every push to `main`. CI also builds the Docker image and imports the app
 inside it, so a change that breaks the image fails too. It also runs
-`helm lint --strict` on the chart.
+`helm lint --strict` on the chart, and `terraform fmt -check` and `terraform validate` on
+the Terraform, with no AWS credentials.
 
 ## Layout
 
@@ -226,7 +382,9 @@ Dockerfile               two-stage image that runs as a non-root user
 compose.yaml             Postgres, then the migrations, then the API
 charts/                  Helm chart: migrations as a Job, then the API and its Service
 deploy/kind/             Postgres for a local kind cluster only
-.github/workflows/       CI: the checks, the image build and the chart lint
+deploy/aws/              the GPU check Job and the vLLM Deployment, for EKS
+infra/aws/               Terraform for a temporary EKS cluster with a spot GPU node
+.github/workflows/       CI: the checks, the image build, the chart lint, the Terraform checks
 ```
 
 ## License
