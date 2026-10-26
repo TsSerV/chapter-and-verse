@@ -1,5 +1,4 @@
 import asyncio
-import time
 
 import httpx
 import pytest
@@ -32,15 +31,22 @@ async def ask_all_at_once() -> list[httpx.Response]:
 
 
 async def test_concurrent_requests_overlap() -> None:
-    app.dependency_overrides[get_answerer] = lambda: slow_fake_answer
+    inside = 0
+    all_inside = asyncio.Event()
 
-    start = time.perf_counter()
+    async def wait_for_the_others(question: str) -> str:
+        nonlocal inside
+        inside += 1
+        if inside == REQUESTS:
+            all_inside.set()
+        # Returns only when all five are inside at once. One at a time would time out.
+        await asyncio.wait_for(all_inside.wait(), timeout=5)
+        return f"Fake answer to: {question}"
+
+    app.dependency_overrides[get_answerer] = lambda: wait_for_the_others
     responses = await ask_all_at_once()
-    elapsed = time.perf_counter() - start
 
     assert [r.status_code for r in responses] == [200] * REQUESTS
-    # Halfway between all at once (1 delay) and one after another (5 delays).
-    assert elapsed < DELAY_SECONDS * (1 + REQUESTS) / 2
 
 
 async def test_concurrent_requests_keep_their_own_request_id() -> None:
