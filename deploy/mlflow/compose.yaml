@@ -1,0 +1,27 @@
+# MLflow tracking server and model registry, reachable from this machine only.
+# Its own project, so `docker compose down -v` at the root never deletes the registry.
+name: mlflow
+
+services:
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v3.17.2@sha256:2cc40b3208991940d824d04f339833a0b69507569012aa5ec545690608602fc0
+    command:
+      - mlflow
+      - server
+      - --host=0.0.0.0
+      - --port=5000
+      # One user. The default of four workers takes about 1 GiB of Docker's memory.
+      - --workers=1
+      - --backend-store-uri=sqlite:////mlflow/mlflow.db
+      - --artifacts-destination=/mlflow/artifacts
+    environment:
+      # Background jobs are for evaluation and tracing, which the registry does not use.
+      MLFLOW_SERVER_ENABLE_JOB_EXECUTION: "false"
+    ports:
+      # Not 5000 on the host: macOS uses that port for AirPlay.
+      - "127.0.0.1:5050:5000"
+    volumes:
+      - registry:/mlflow
+
+volumes:
+  registry:

@@ -22,8 +22,8 @@ jobs:
           enable-cache: true
 
       - run: uv sync --locked
-      - run: uv run ruff check src tests migrations
-      - run: uv run mypy src
+      - run: uv run ruff check src tests migrations serving
+      - run: uv run mypy src serving
       - run: uv run pytest
 
   image:
