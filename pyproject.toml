@@ -40,6 +40,8 @@ strict = true
 plugins = ["pydantic.mypy"]
 
 [tool.pytest.ini_options]
+# So tests can import serving/, which is not part of the package.
+pythonpath = ["."]
 filterwarnings = [
     # Inside Starlette's TestClient, not our code. Remove when Starlette fixes it.
     "ignore:The anyio.abc.BlockingPortal alias is deprecated:DeprecationWarning",
