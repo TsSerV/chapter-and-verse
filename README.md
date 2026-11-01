@@ -16,8 +16,10 @@ is stored with its question, model, latency and request ID, and
 `GET /answers/{answer_id}` reads it back. `GET /health` reports that the process can
 serve requests.
 
-Open models now run on a GPU in AWS, served by vLLM on an EKS cluster that exists only
-while it is in use. `/ask` does not use them yet. It still calls Claude.
+Open models now run on a GPU in AWS, served by vLLM behind KServe on an EKS cluster that
+exists only while it is in use. An MLflow model registry records which model is served,
+at which exact commit, with which settings. `/ask` does not use them yet. It still calls
+Claude.
 
 There is no legislation corpus, no retrieval and no citations yet, so the answers today
 are only as good as the model's own knowledge.
@@ -138,10 +140,67 @@ kubectl port-forward svc/chapter-and-verse 8000:8000
 `kind delete cluster --name chapter-and-verse` removes everything, the stored answers
 included.
 
+### The model registry
+
+Every model this project serves is a version of one registered model, `answerer`, in
+[MLflow](https://mlflow.org/docs/latest/ml/model-registry/). A version holds:
+
+- the source: a Hugging Face repository at an exact commit, such as
+  `hf://Qwen/Qwen3-1.7B:70d244cc86ccca08cf5af4e1e306ecf908b1ad5e`. A repository name can
+  point at new weights tomorrow. A commit cannot.
+- the vLLM flags to serve it with, such as the context length
+- the numbers measured for it, such as how long it took to start and how much KV cache
+  fits on the GPU
+
+Serving reads an alias, never a version number. `champion` is the version for the GPU
+cluster. `local` is a version small enough for kind. Moving an alias changes what is
+served without changing any manifest.
+
+Start MLflow. It listens on port 5050 of your own machine, because macOS uses 5000 for
+AirPlay. The registry is kept in a Docker volume, in a compose project of its own, so
+`docker compose down -v` at the root never deletes it:
+
+```sh
+docker compose -f deploy/mlflow/compose.yaml up -d
+```
+
+The UI is at http://127.0.0.1:5050. The commands below use this server unless
+`MLFLOW_TRACKING_URI` points at another one.
+
+`register` looks up the commit the repository points to now, adds a version and prints
+its number. The default flags are `--max-model-len=8192 --reasoning-parser=qwen3`.
+The examples in this README use four versions, registered in this order:
+
+```sh
+uv run python -m serving.registry register Qwen/Qwen3-0.6B \
+  --vllm-args="--max-model-len=2048 --reasoning-parser=qwen3"
+uv run python -m serving.registry register Qwen/Qwen3-1.7B
+uv run python -m serving.registry register Qwen/Qwen3-8B
+uv run python -m serving.registry register Qwen/Qwen3-8B-FP8
+```
+
+Version 1 has a short context, so vLLM's CPU build fits in the memory kind can give it.
+
+`alias` points an alias at a version:
+
+```sh
+uv run python -m serving.registry alias local 1
+uv run python -m serving.registry alias champion 2
+```
+
+`record` saves what you measured. The numbers go on the MLflow run behind the version,
+next to its flags:
+
+```sh
+uv run python -m serving.registry record 2 --metric kserve_ready_seconds 485 \
+  --tag measured_on g6.xlarge
+```
+
 ### On AWS, with a GPU
 
-This serves an open model on an NVIDIA L4 GPU with [vLLM](https://docs.vllm.ai/), through
-an OpenAI compatible API. The service does not use it yet: `/ask` still calls Claude.
+This serves an open model on an NVIDIA L4 GPU with [vLLM](https://docs.vllm.ai/) behind
+[KServe](https://kserve.github.io/website/), through an OpenAI compatible API. The
+service does not use it yet: `/ask` still calls Claude.
 
 Terraform in `infra/aws/` creates an EKS cluster in eu-west-2 (London) with two nodes: an
 ARM `t4g.medium` for the system pods, and one spot NVIDIA L4 for models. Only pods that
@@ -223,35 +282,87 @@ The log shows an NVIDIA L4 with 23,034 MiB of memory.
 
 #### Serve a model
 
+KServe runs the model, and the registry says which one. Install cert-manager first,
+because KServe's webhooks need certificates. Then install KServe in Standard mode: a plain
+Deployment and Service per model, with no Knative and no Istio. You reach the model with
+`port-forward`, so KServe creates no Ingress.
+
 ```sh
-kubectl apply -f deploy/aws/vllm.yaml
-kubectl rollout status deployment/vllm --timeout=15m
+helm install cert-manager oci://quay.io/jetstack/charts/cert-manager --version v1.21.3 \
+  --namespace cert-manager --create-namespace --set crds.enabled=true --wait
+helm install kserve-crd oci://ghcr.io/kserve/charts/kserve-crd --version v0.21.0 \
+  --namespace kserve --create-namespace --wait
+helm install kserve oci://ghcr.io/kserve/charts/kserve-resources --version v0.21.0 \
+  --namespace kserve \
+  --set kserve.controller.deploymentMode=Standard \
+  --set kserve.controller.gateway.disableIngressCreation=true \
+  --set kserve.controller.gateway.disableIstioVirtualHost=true \
+  --wait
 ```
 
-It serves Qwen3-1.7B. The first start takes about 6 minutes, most of it the image pull. To
-serve another model, change one value, for example
-`kubectl set env deployment/vllm MODEL=Qwen/Qwen3-8B-FP8`.
+Both run on the system node. The GPU node's taint keeps them off the GPU.
 
-To reach it, keep this running in its own terminal:
+With MLflow running, render the manifests for the `champion` alias and apply them:
 
 ```sh
-kubectl port-forward svc/vllm 8000:8000
+kubectl create namespace models
+uv run python -m serving.render | kubectl apply -n models -f -
+kubectl wait --for=condition=Ready inferenceservice/answerer -n models --timeout=20m
 ```
 
-Then send a chat request. `model` must be the model being served, which
-`curl http://127.0.0.1:8000/v1/models` shows:
+`serving/render.py` prints two manifests. The ServingRuntime says how to run vLLM: the
+image, the probes and the volumes. The InferenceService says what to run: the commit and
+the flags of the version, and one GPU. Its `app.kubernetes.io/version` label is the
+version number, so a running pod leads back to its exact weights and its measured
+numbers. `--alias` and `--target` choose another alias or cluster. The defaults are
+`champion` and `eks`.
+
+vLLM downloads the weights itself, not KServe's storage initializer. The initializer held
+most of the model in memory while it downloaded, 2.6 GiB for Qwen3-1.7B. Its memory grows
+with the model, and the GPU node has 16 GiB for everything.
+
+With version 2, Qwen3-1.7B, the first start takes about 8 minutes, more than half of it
+the image pull. To serve another version, move the alias and apply again:
 
 ```sh
-curl http://127.0.0.1:8000/v1/chat/completions \
+uv run python -m serving.registry alias champion 4
+uv run python -m serving.render | kubectl apply -n models -f -
+```
+
+There is one GPU, so the old pod stops before the new one starts. Nothing answers until
+the new pod is Ready.
+
+To reach the model, keep this running in its own terminal:
+
+```sh
+kubectl port-forward -n models svc/answerer-predictor 8080:80
+```
+
+Then send a chat request. `model` is always `answerer`, whatever version is behind it:
+
+```sh
+curl http://127.0.0.1:8080/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -d '{"model": "Qwen/Qwen3-1.7B",
+  -d '{"model": "answerer",
        "messages": [{"role": "user", "content": "In one sentence, what does the Equality Act 2010 do?"}],
        "max_tokens": 300,
        "chat_template_kwargs": {"enable_thinking": false}}'
 ```
 
 The answer is in `choices[0].message.content`. `enable_thinking: false` skips Qwen3's
-thinking step, so the answer comes back sooner.
+thinking step, so the answer comes back sooner. vLLM's Prometheus metrics are at
+http://127.0.0.1:8080/metrics.
+
+The same works on kind, without a GPU. Install cert-manager and KServe with the same
+commands, then render the `local` alias for kind:
+
+```sh
+kubectl create namespace models
+uv run python -m serving.render --alias local --target kind | kubectl apply -n models -f -
+```
+
+This uses vLLM's CPU build, with no compile step and a small KV cache, so it fits in
+about 5 GiB. An answer takes about 15 seconds.
 
 #### Destroy it
 
@@ -271,9 +382,28 @@ aws ec2 describe-instances --region eu-west-2 \
 aws ec2 describe-volumes --region eu-west-2 --query 'Volumes[].VolumeId'
 ```
 
+#### What one L4 holds
+
+Measured on 31 October 2026 with vLLM 0.31.0 on an on-demand `g6.xlarge`, with the
+default flags `--max-model-len=8192 --reasoning-parser=qwen3`. vLLM used 92% of the GPU's
+memory, its default.
+
+| Version | Weights on the GPU | KV cache | Requests of 8,192 tokens at once |
+| --- | --- | --- | --- |
+| 3, Qwen3-8B in bf16 | 15.27 GiB | 22,976 tokens | 2.80 |
+| 4, Qwen3-8B-FP8 | 8.9 GiB | 68,768 tokens | 8.39 |
+
+FP8 stores each weight in one byte instead of two, so the weights take 6.4 GiB less. The
+KV cache stays in bf16, and the freed memory holds three times as many tokens. The last
+column is how many requests of the full context fit in the KV cache at the same time.
+Shorter requests fit more. How FP8 changes the answers is not measured yet.
+
+The same numbers are recorded on versions 3 and 4 in the registry.
+
 #### How long a start takes
 
-Measured on 24 October 2026 with Qwen3-1.7B, on a spot `g6.2xlarge`:
+Measured on 24 October 2026 with Qwen3-1.7B, on a spot `g6.2xlarge`, with a plain vLLM
+Deployment before KServe:
 
 | Stage | Seconds |
 | --- | --- |
@@ -289,6 +419,11 @@ group was created. `torch.compile` takes 34 of the 50 seconds of engine start. F
 
 Nothing is cached between pods, so each new pod downloads the weights and compiles again.
 On the same node, it does not pull the image again.
+
+Through KServe, measured on 31 October 2026 with the same model on an on-demand
+`g6.xlarge`, the InferenceService was Ready 485 seconds after `kubectl apply`. The image
+pull took 269 of them. The `g6.xlarge` has half the vCPUs of the `g6.2xlarge`, so the
+difference is not only what KServe adds.
 
 ### Ask it something
 
@@ -381,8 +516,10 @@ migrations/              Alembic migrations, one file per schema change
 Dockerfile               two-stage image that runs as a non-root user
 compose.yaml             Postgres, then the migrations, then the API
 charts/                  Helm chart: migrations as a Job, then the API and its Service
+serving/                 registry commands, and the KServe manifests rendered from an alias
 deploy/kind/             Postgres for a local kind cluster only
-deploy/aws/              the GPU check Job and the vLLM Deployment, for EKS
+deploy/mlflow/           the MLflow server for the model registry, on your own machine
+deploy/aws/              the GPU check Job, for EKS
 infra/aws/               Terraform for a temporary EKS cluster with a spot GPU node
 .github/workflows/       CI: the checks, the image build, the chart lint, the Terraform checks
 ```
