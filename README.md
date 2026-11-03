@@ -169,7 +169,7 @@ The UI is at http://127.0.0.1:5050. The commands below use this server unless
 
 `register` looks up the commit the repository points to now, adds a version and prints
 its number. The default flags are `--max-model-len=8192 --reasoning-parser=qwen3`.
-The examples in this README use four versions, registered in this order:
+The examples in this README use six versions, registered in this order:
 
 ```sh
 uv run python -m serving.registry register Qwen/Qwen3-0.6B \
@@ -177,15 +177,21 @@ uv run python -m serving.registry register Qwen/Qwen3-0.6B \
 uv run python -m serving.registry register Qwen/Qwen3-1.7B
 uv run python -m serving.registry register Qwen/Qwen3-8B
 uv run python -m serving.registry register Qwen/Qwen3-8B-FP8
+uv run python -m serving.registry register Qwen/Qwen3-0.6B \
+  --vllm-args="--max-model-len=2048 --reasoning-parser=qwen3 --max-num-seqs=4"
+uv run python -m serving.registry register Qwen/Qwen3-1.7B \
+  --vllm-args="--max-model-len=8192 --reasoning-parser=qwen3 --max-num-seqs=16"
 ```
 
 Version 1 has a short context, so vLLM's CPU build fits in the memory kind can give it.
+Versions 5 and 6 are versions 1 and 2 with a batch limit, `--max-num-seqs`. A version with
+a batch limit is served with autoscaling, see below.
 
 `alias` points an alias at a version:
 
 ```sh
-uv run python -m serving.registry alias local 1
-uv run python -m serving.registry alias champion 2
+uv run python -m serving.registry alias local 5
+uv run python -m serving.registry alias champion 6
 ```
 
 `record` saves what you measured. The numbers go on the MLflow run behind the version,
@@ -282,10 +288,28 @@ The log shows an NVIDIA L4 with 23,034 MiB of memory.
 
 #### Serve a model
 
-KServe runs the model, and the registry says which one. Install cert-manager first,
-because KServe's webhooks need certificates. Then install KServe in Standard mode: a plain
-Deployment and Service per model, with no Knative and no Istio. You reach the model with
-`port-forward`, so KServe creates no Ingress.
+Install Prometheus and KEDA first. KEDA scales the model on vLLM's metrics, which
+Prometheus collects. KServe looks for KEDA only when it starts, so KEDA goes in before
+KServe.
+
+```sh
+helm install prometheus prometheus --repo https://prometheus-community.github.io/helm-charts \
+  --version 29.37.0 --namespace monitoring --create-namespace \
+  --set alertmanager.enabled=false \
+  --set kube-state-metrics.enabled=false \
+  --set prometheus-node-exporter.enabled=false \
+  --set prometheus-pushgateway.enabled=false \
+  --set server.persistentVolume.enabled=false \
+  --set server.global.scrape_interval=15s \
+  --wait
+helm install keda keda --repo https://kedacore.github.io/charts --version 2.21.0 \
+  --namespace keda --create-namespace --wait
+```
+
+KServe runs the model, and the registry says which one. Install cert-manager before
+KServe, because KServe's webhooks need certificates. Then install KServe in Standard
+mode: a plain Deployment and Service per model, with no Knative and no Istio. You reach
+the model with `port-forward`, so KServe creates no Ingress.
 
 ```sh
 helm install cert-manager oci://quay.io/jetstack/charts/cert-manager --version v1.21.3 \
@@ -317,6 +341,14 @@ version number, so a running pod leads back to its exact weights and its measure
 numbers. `--alias` and `--target` choose another alias or cluster. The defaults are
 `champion` and `eks`.
 
+A version registered with `--max-num-seqs` runs one or two replicas. KEDA counts the
+requests inside vLLM, running or waiting, and adds a replica when they average more than
+three quarters of the batch: 12 for a batch of 16. Waiting requests alone would drop to
+zero as soon as the second replica took load, and it would be removed again. The second
+replica stops 5 minutes after the load drops. Prometheus scrapes each pod twice, through
+the pod and through the Service, because KServe copies the scrape annotations to both, so
+the query counts the pod's own scrape only.
+
 vLLM downloads the weights itself, not KServe's storage initializer. The initializer held
 most of the model in memory while it downloaded, 2.6 GiB for Qwen3-1.7B. Its memory grows
 with the model, and the GPU node has 16 GiB for everything.
@@ -328,6 +360,11 @@ the image pull. To serve another version, move the alias and apply again:
 uv run python -m serving.registry alias champion 4
 uv run python -m serving.render | kubectl apply -n models -f -
 ```
+
+After a change, wait with `kubectl rollout status deployment/answerer-predictor -n models`.
+`kubectl wait` on the InferenceService can miss it, because KServe copies
+`observedGeneration` from the Deployment
+([kserve/kserve#6081](https://github.com/kserve/kserve/issues/6081)).
 
 There is one GPU, so the old pod stops before the new one starts. Nothing answers until
 the new pod is Ready.
@@ -353,8 +390,8 @@ The answer is in `choices[0].message.content`. `enable_thinking: false` skips Qw
 thinking step, so the answer comes back sooner. vLLM's Prometheus metrics are at
 http://127.0.0.1:8080/metrics.
 
-The same works on kind, without a GPU. Install cert-manager and KServe with the same
-commands, then render the `local` alias for kind:
+The same works on kind, without a GPU. Install Prometheus, KEDA, cert-manager and KServe
+with the same commands, then render the `local` alias for kind:
 
 ```sh
 kubectl create namespace models
@@ -362,7 +399,8 @@ uv run python -m serving.render --alias local --target kind | kubectl apply -n m
 ```
 
 This uses vLLM's CPU build, with no compile step and a small KV cache, so it fits in
-about 5 GiB. An answer takes about 15 seconds.
+about 5 GiB. An answer takes about 15 seconds. kind has room for one replica, so a second
+one waits as Pending.
 
 #### Destroy it
 
@@ -516,7 +554,7 @@ migrations/              Alembic migrations, one file per schema change
 Dockerfile               two-stage image that runs as a non-root user
 compose.yaml             Postgres, then the migrations, then the API
 charts/                  Helm chart: migrations as a Job, then the API and its Service
-serving/                 registry commands, and the KServe manifests rendered from an alias
+serving/                 registry commands, KServe manifests from an alias, a load generator
 deploy/kind/             Postgres for a local kind cluster only
 deploy/mlflow/           the MLflow server for the model registry, on your own machine
 deploy/aws/              the GPU check Job, for EKS

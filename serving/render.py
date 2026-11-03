@@ -9,6 +9,9 @@ from serving.registry import MODEL_NAME, connect, source_and_run
 
 VLLM_VERSION = "v0.31.0"
 PORT = 8080
+# The prometheus chart's server, installed in the monitoring namespace.
+PROMETHEUS = "http://prometheus-server.monitoring.svc.cluster.local"
+MAX_REPLICAS = 2
 
 
 def hub_model(source: str) -> tuple[str, str]:
@@ -17,6 +20,50 @@ def hub_model(source: str) -> tuple[str, str]:
     if not source.startswith("hf://") or not revision:
         raise ValueError(f"Expected hf://owner/model:commit, got {source}")
     return repo, revision
+
+
+def max_num_seqs(vllm_args: str) -> int | None:
+    # The batch limit a version was registered with, if it has one.
+    parser = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
+    parser.add_argument("--max-num-seqs", type=int)
+    known, _ = parser.parse_known_args(shlex.split(vllm_args))
+    batch: int | None = known.max_num_seqs
+    return batch
+
+
+def autoscaling(batch: int) -> dict[str, Any]:
+    # KServe copies the scrape annotations to the Service too, so Prometheus reads each
+    # pod twice. Only the pod's own scrape counts.
+    selector = f'{{model_name="{MODEL_NAME}", job="kubernetes-pods"}}'
+    # Every request inside vLLM, running or waiting. Waiting alone drops to zero as soon
+    # as a second replica takes load, and the autoscaler would remove it again.
+    query = (
+        f"sum(vllm:num_requests_running{selector})"
+        f" + sum(vllm:num_requests_waiting{selector})"
+    )
+    return {
+        "minReplicas": 1,
+        "maxReplicas": MAX_REPLICAS,
+        "autoScaling": {
+            "metrics": [
+                {
+                    "type": "External",
+                    "external": {
+                        "metric": {
+                            "backend": "prometheus",
+                            "serverAddress": PROMETHEUS,
+                            "query": query,
+                        },
+                        # KEDA compares this with the average per replica. A new replica
+                        # starts at three quarters of the batch, before requests queue.
+                        "target": {"type": "Value", "value": str(batch * 3 // 4)},
+                    },
+                }
+            ],
+            # A GPU pod takes minutes to start, so a short dip in load does not remove it.
+            "behavior": {"scaleDown": {"stabilizationWindowSeconds": 300}},
+        },
+    }
 
 
 def serving_runtime(target: str) -> dict[str, Any]:
@@ -95,18 +142,31 @@ def inference_service(
         # --enforce-eager leaves vLLM's sampler compiled. Building it with g++ on the
         # first request took the pod past 5Gi.
         model["env"] = [{"name": "TORCH_COMPILE_DISABLE", "value": "1"}]
+        # The request is what vLLM uses, so kind never starts a second pod that cannot fit.
         model["resources"] = {
-            "requests": {"cpu": "2", "memory": "3Gi"},
+            "requests": {"cpu": "2", "memory": "4Gi"},
             "limits": {"cpu": "4", "memory": "5Gi"},
         }
+    # Prometheus reads vLLM's metrics from every predictor pod.
+    annotations = {
+        "prometheus.io/scrape": "true",
+        "prometheus.io/port": str(PORT),
+        "prometheus.io/path": "/metrics",
+    }
+    batch = max_num_seqs(vllm_args)
+    if batch is None:
+        # No batch limit, so no way to tell when a replica is full: one replica.
+        annotations["serving.kserve.io/autoscalerClass"] = "none"
+    else:
+        annotations["serving.kserve.io/autoscalerClass"] = "keda"
+        predictor |= autoscaling(batch)
     return {
         "apiVersion": "serving.kserve.io/v1beta1",
         "kind": "InferenceService",
         "metadata": {
             "name": MODEL_NAME,
             "labels": {"app.kubernetes.io/version": version},
-            # One replica for now, so no autoscaler.
-            "annotations": {"serving.kserve.io/autoscalerClass": "none"},
+            "annotations": annotations,
         },
         "spec": {"predictor": predictor},
     }
