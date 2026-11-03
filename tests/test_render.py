@@ -1,9 +1,16 @@
 import pytest
 
-from serving.render import VLLM_VERSION, hub_model, inference_service, serving_runtime
+from serving.render import (
+    VLLM_VERSION,
+    hub_model,
+    inference_service,
+    max_num_seqs,
+    serving_runtime,
+)
 
 SOURCE = "hf://Qwen/Qwen3-1.7B:70d244cc86ccca08cf5af4e1e306ecf908b1ad5e"
 VLLM_ARGS = "--max-model-len=8192 --reasoning-parser=qwen3"
+SCALED_ARGS = f"{VLLM_ARGS} --max-num-seqs=16"
 
 
 def parse_quantity(value: str) -> float:
@@ -102,3 +109,41 @@ def test_runtime_pins_the_vllm_build_for_each_cluster(target: str, image: str) -
     container = serving_runtime(target)["spec"]["containers"][0]
 
     assert container["image"] == f"{image}:{VLLM_VERSION}"
+
+
+@pytest.mark.parametrize(
+    ("vllm_args", "batch"),
+    [(VLLM_ARGS, None), (SCALED_ARGS, 16), ("--max-num-seqs 16 --enforce-eager", 16)],
+)
+def test_reads_the_batch_limit_from_the_flags(vllm_args: str, batch: int | None) -> None:
+    assert max_num_seqs(vllm_args) == batch
+
+
+def test_one_replica_when_the_version_has_no_batch_limit() -> None:
+    isvc = inference_service(SOURCE, VLLM_ARGS, "3", "eks")
+
+    assert isvc["metadata"]["annotations"]["serving.kserve.io/autoscalerClass"] == "none"
+    assert "autoScaling" not in isvc["spec"]["predictor"]
+
+
+def test_scales_on_the_requests_in_vllm_before_the_batch_is_full() -> None:
+    isvc = inference_service(SOURCE, SCALED_ARGS, "6", "eks")
+    predictor = isvc["spec"]["predictor"]
+    external = predictor["autoScaling"]["metrics"][0]["external"]
+
+    assert isvc["metadata"]["annotations"]["serving.kserve.io/autoscalerClass"] == "keda"
+    assert (predictor["minReplicas"], predictor["maxReplicas"]) == (1, 2)
+    # Prometheus scrapes each pod twice, through the pod and through the Service.
+    selector = '{model_name="answerer", job="kubernetes-pods"}'
+    assert f"vllm:num_requests_running{selector}" in external["metric"]["query"]
+    assert f"vllm:num_requests_waiting{selector}" in external["metric"]["query"]
+    # KServe passes only the value to KEDA: three quarters of a batch of 16.
+    assert external["target"]["value"] == "12"
+
+
+@pytest.mark.parametrize("vllm_args", [VLLM_ARGS, SCALED_ARGS])
+def test_prometheus_scrapes_every_predictor_pod(vllm_args: str) -> None:
+    annotations = inference_service(SOURCE, vllm_args, "3", "eks")["metadata"]["annotations"]
+
+    assert annotations["prometheus.io/scrape"] == "true"
+    assert annotations["prometheus.io/port"] == "8080"
