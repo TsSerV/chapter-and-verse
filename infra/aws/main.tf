@@ -14,6 +14,11 @@ module "vpc" {
   public_subnets          = ["10.0.0.0/20", "10.0.16.0/20", "10.0.32.0/20"]
   map_public_ip_on_launch = true
   enable_nat_gateway      = false
+
+  # Karpenter launches nodes into the subnets with this tag.
+  public_subnet_tags = {
+    "karpenter.sh/discovery" = var.name
+  }
 }
 
 module "eks" {
@@ -46,6 +51,11 @@ module "eks" {
   vpc_id     = module.vpc.vpc_id
   subnet_ids = module.vpc.public_subnets
 
+  # Karpenter gives its nodes the security group with this tag, the one every node shares.
+  node_security_group_tags = {
+    "karpenter.sh/discovery" = var.name
+  }
+
   eks_managed_node_groups = {
     system = {
       ami_type       = "AL2023_ARM_64_STANDARD"
@@ -54,37 +64,18 @@ module "eks" {
       max_size       = 2
       desired_size   = 1
     }
-
-    gpu = {
-      # The NVIDIA AMI has the driver. The device plugin is installed separately.
-      ami_type = "AL2023_x86_64_NVIDIA"
-      # Two sizes with the same L4 GPU. When one is out of capacity, the other can launch.
-      instance_types = ["g6.xlarge", "g6.2xlarge"]
-      capacity_type  = "SPOT"
-      min_size       = 0
-      max_size       = 1
-      desired_size   = var.gpu_nodes
-
-      # Room for the vLLM image and model weights.
-      block_device_mappings = {
-        xvda = {
-          device_name = "/dev/xvda"
-          ebs = {
-            volume_size           = 100
-            volume_type           = "gp3"
-            delete_on_termination = true
-          }
-        }
-      }
-
-      # Only pods that tolerate this run on the GPU node.
-      taints = {
-        gpu = {
-          key    = "nvidia.com/gpu"
-          value  = "true"
-          effect = "NO_SCHEDULE"
-        }
-      }
-    }
   }
+}
+
+# IAM roles for the Karpenter controller and its nodes, and the queue that warns of spot
+# interruptions. The GPU nodes themselves come from the NodePool in deploy/aws/karpenter.yaml.
+module "karpenter" {
+  source  = "terraform-aws-modules/eks/aws//modules/karpenter"
+  version = "21.29.0"
+
+  cluster_name = module.eks.cluster_name
+
+  # A fixed name, because the EC2NodeClass refers to it.
+  node_iam_role_use_name_prefix = false
+  node_iam_role_name            = "${var.name}-karpenter-node"
 }

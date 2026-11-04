@@ -1,0 +1,66 @@
+# GPU nodes on demand. Karpenter starts one when a pod asks for a GPU and none is free,
+# and removes it once it is empty.
+apiVersion: karpenter.k8s.aws/v1
+kind: EC2NodeClass
+metadata:
+  name: gpu
+spec:
+  # The newest EKS AMI. For a GPU instance type Karpenter picks its NVIDIA variant,
+  # which has the driver.
+  amiSelectorTerms:
+    - alias: al2023@latest
+  # The node role from infra/aws, and the subnets and security group Terraform tagged.
+  role: chapter-and-verse-karpenter-node
+  subnetSelectorTerms:
+    - tags:
+        karpenter.sh/discovery: chapter-and-verse
+  securityGroupSelectorTerms:
+    - tags:
+        karpenter.sh/discovery: chapter-and-verse
+  # Room for the vLLM image and model weights.
+  blockDeviceMappings:
+    - deviceName: /dev/xvda
+      ebs:
+        volumeSize: 100Gi
+        volumeType: gp3
+        deleteOnTermination: true
+  # The tag Terraform puts on everything, so a node left behind is easy to find.
+  tags:
+    Project: chapter-and-verse
+---
+apiVersion: karpenter.sh/v1
+kind: NodePool
+metadata:
+  name: gpu
+spec:
+  template:
+    metadata:
+      labels:
+        # The NVIDIA device plugin runs only on nodes with this label.
+        nvidia.com/gpu.present: "true"
+    spec:
+      nodeClassRef:
+        group: karpenter.k8s.aws
+        kind: EC2NodeClass
+        name: gpu
+      requirements:
+        # One L4 and 4 vCPUs each, so two nodes fit the 8 vCPU quota for G instances.
+        - key: node.kubernetes.io/instance-type
+          operator: In
+          values: ["g6.xlarge"]
+        # Spot when London has capacity, on demand when it has none.
+        - key: karpenter.sh/capacity-type
+          operator: In
+          values: ["spot", "on-demand"]
+      # Only pods that tolerate this run on a GPU node.
+      taints:
+        - key: nvidia.com/gpu
+          value: "true"
+          effect: NoSchedule
+  # As many GPUs as the predictor has replicas at most.
+  limits:
+    nvidia.com/gpu: 2
+  disruption:
+    # Remove a node a minute after its last pod goes. Never move a running model.
+    consolidationPolicy: WhenEmpty
+    consolidateAfter: 1m
