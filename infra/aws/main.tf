@@ -75,6 +75,9 @@ module "karpenter" {
 
   cluster_name = module.eks.cluster_name
 
+  # Inline, because the controller policy is over the 6,144 character limit of a managed policy.
+  enable_inline_policy = true
+
   # A fixed name, because the EC2NodeClass refers to it.
   node_iam_role_use_name_prefix = false
   node_iam_role_name            = "${var.name}-karpenter-node"
