@@ -17,9 +17,10 @@ is stored with its question, model, latency and request ID, and
 serve requests.
 
 Open models now run on a GPU in AWS, served by vLLM behind KServe on an EKS cluster that
-exists only while it is in use. An MLflow model registry records which model is served,
-at which exact commit, with which settings. `/ask` does not use them yet. It still calls
-Claude.
+exists only while it is in use. Karpenter starts a GPU node when a model needs one, and
+KEDA adds a second replica under load. An MLflow model registry records which model is
+served, at which exact commit, with which settings. `/ask` does not use them yet. It still
+calls Claude.
 
 There is no legislation corpus, no retrieval and no citations yet, so the answers today
 are only as good as the model's own knowledge.
@@ -34,6 +35,7 @@ how it was measured.
 | Requests of 8,192 tokens at once on one L4 | Qwen3-8B in bf16 | [2.80](docs/measurements.md#what-one-l4-holds) |
 | Requests of 8,192 tokens at once on one L4 | Qwen3-8B-FP8 | [8.39](docs/measurements.md#what-one-l4-holds) |
 | `kubectl apply` to a Ready model through KServe | Qwen3-1.7B | [485 seconds](docs/measurements.md#how-long-a-start-takes) |
+| Load start to a second replica Ready, on a new GPU node | Qwen3-1.7B | [512 seconds](docs/measurements.md#how-it-scales) |
 
 ## Run it
 
@@ -147,8 +149,8 @@ them from `values.yaml` and [the two Secrets](docs/kubernetes.md).
   commit, with which settings.
 - [Serving models on a GPU in AWS](docs/gpu-on-aws.md): a temporary EKS cluster, what it
   costs, and how to create and destroy it.
-- [Measurements](docs/measurements.md): what one NVIDIA L4 holds, and how long a model
-  takes to start.
+- [Measurements](docs/measurements.md): what one NVIDIA L4 holds, how long a model takes
+  to start, and how it scales.
 
 ## Test it
 
