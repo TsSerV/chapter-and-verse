@@ -191,7 +191,7 @@ migrations/              Alembic migrations, one file per schema change
 Dockerfile               two-stage image that runs as a non-root user
 compose.yaml             Postgres, then the migrations, then the API
 charts/                  Helm chart: migrations as a Job, then the API and its Service
-serving/                 registry commands, KServe manifests from an alias, a load generator
+serving/                 registry commands, KServe manifests from an alias, a load generator, and a benchmark
 deploy/kind/             Postgres for a local kind cluster only
 deploy/mlflow/           the MLflow server for the model registry, on your own machine
 deploy/aws/              Karpenter's GPU node pool, and the GPU check Job, for EKS
