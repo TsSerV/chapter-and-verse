@@ -45,6 +45,8 @@ pythonpath = ["."]
 filterwarnings = [
     # Inside Starlette's TestClient, not our code. Remove when Starlette fixes it.
     "ignore:The anyio.abc.BlockingPortal alias is deprecated:DeprecationWarning",
+    # Inside MLflow's SQLite store, not our code. Remove when MLflow fixes it.
+    "ignore:The ``noload`` loader strategy is deprecated:sqlalchemy.exc.SADeprecationWarning",
 ]
 
 [tool.fastapi]

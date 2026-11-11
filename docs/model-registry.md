@@ -13,7 +13,7 @@ Every model this project serves is a version of one registered model, `answerer`
   point at new weights tomorrow. A commit cannot.
 - the vLLM flags to serve it with, such as the context length
 - the numbers measured for it, such as how long it took to start and how much KV cache
-  fits on the GPU
+  fits on the GPU. Each measurement is a run of its own, under the version's run.
 
 Serving reads an alias, never a version number. `champion` is the version for the GPU
 cluster. `local` is a version small enough for kind. Moving an alias changes what is
@@ -58,10 +58,15 @@ uv run python -m serving.registry alias local 5
 uv run python -m serving.registry alias champion 6
 ```
 
-`record` saves what you measured. The numbers go on the MLflow run behind the version,
-next to its flags:
+`record` saves one measurement as a new MLflow run under the run behind the version, and
+prints the new run's ID. Tags say what the numbers were measured on:
 
 ```sh
 uv run python -m serving.registry record 2 --metric kserve_ready_seconds 485 \
   --tag measured_on g6.xlarge
 ```
+
+A second measurement, on another instance type or with other settings, gets a run of its
+own. It never replaces the numbers or tags of the first. In the UI, the measurements are
+listed under the version's run in the `answerer` experiment, where they can be compared
+side by side.
