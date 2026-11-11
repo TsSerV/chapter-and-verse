@@ -43,7 +43,7 @@ def register(client: MlflowClient, repo: str, vllm_args: str) -> str:
     except MlflowException as error:
         if error.error_code != "RESOURCE_ALREADY_EXISTS":
             raise
-    # The source names the exact weights. The run keeps the serving flags and the numbers.
+    # The source names the exact weights. The run keeps the serving flags.
     source = f"hf://{repo}:{revision}"
     version = client.create_model_version(MODEL_NAME, source, run_id=run.info.run_id)
     return str(version.version)
@@ -51,13 +51,16 @@ def register(client: MlflowClient, repo: str, vllm_args: str) -> str:
 
 def record(
     client: MlflowClient, version: str, metrics: dict[str, float], tags: dict[str, str]
-) -> None:
-    # Measured numbers go on the run behind the version, next to its serving flags.
-    _, run_id = source_and_run(client.get_model_version(MODEL_NAME, version))
-    for name, value in metrics.items():
-        client.log_metric(run_id, name, value)
-    for name, text in tags.items():
-        client.set_tag(run_id, name, text)
+) -> str:
+    # Each measurement is a run under the version's run, so none hides another.
+    _, version_run = source_and_run(client.get_model_version(MODEL_NAME, version))
+    # The UI shows a run under its parent only when both are in the same experiment.
+    experiment = client.get_run(version_run).info.experiment_id
+    with mlflow.start_run(
+        experiment_id=experiment, parent_run_id=version_run, tags=tags
+    ) as run:
+        mlflow.log_metrics(metrics)
+    return str(run.info.run_id)
 
 
 def main() -> None:
@@ -72,7 +75,9 @@ def main() -> None:
     alias.add_argument("alias")
     alias.add_argument("version")
 
-    measured = commands.add_parser("record", help="log measured numbers for a version")
+    measured = commands.add_parser(
+        "record", help="log a measurement as a new run under a version"
+    )
     measured.add_argument("version")
     measured.add_argument(
         "--metric", nargs=2, action="append", required=True, metavar=("NAME", "VALUE")
@@ -89,7 +94,7 @@ def main() -> None:
         client.set_registered_model_alias(MODEL_NAME, args.alias, args.version)
     else:
         metrics = {name: float(value) for name, value in args.metric}
-        record(client, args.version, metrics, dict(args.tag))
+        print(record(client, args.version, metrics, dict(args.tag)))
 
 
 if __name__ == "__main__":
