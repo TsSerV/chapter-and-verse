@@ -194,6 +194,7 @@ charts/                  Helm chart: migrations as a Job, then the API and its S
 serving/                 registry commands, KServe manifests from an alias, a load generator, and a benchmark
 deploy/kind/             Postgres for a local kind cluster only
 deploy/mlflow/           the MLflow server for the model registry, on your own machine
+deploy/grafana/          Grafana settings and the dashboard for vLLM
 deploy/aws/              Karpenter's GPU node pool, and the GPU check Job, for EKS
 infra/aws/               Terraform for a temporary EKS cluster, and the IAM and queue for Karpenter
 docs/                    guides for kind, the model registry and the GPU cluster, and the measurements

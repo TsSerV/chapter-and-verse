@@ -1,0 +1,33 @@
+# Grafana for a local or temporary cluster. It is reached through port-forward only,
+# so it has no login.
+grafana.ini:
+  auth:
+    disable_login_form: true
+  auth.anonymous:
+    enabled: true
+    org_role: Admin
+# The cluster keeps nothing. The dashboard comes from the repository.
+persistence:
+  enabled: false
+datasources:
+  datasources.yaml:
+    apiVersion: 1
+    datasources:
+      - name: Prometheus
+        uid: prometheus
+        type: prometheus
+        access: proxy
+        # The prometheus chart's server, in the same namespace.
+        url: http://prometheus-server
+        isDefault: true
+dashboardProviders:
+  dashboardproviders.yaml:
+    apiVersion: 1
+    providers:
+      - name: default
+        type: file
+        options:
+          path: /var/lib/grafana/dashboards/default
+# A ConfigMap made from deploy/grafana/vllm.json.
+dashboardsConfigMaps:
+  default: grafana-dashboards

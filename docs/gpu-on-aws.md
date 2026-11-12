@@ -215,6 +215,29 @@ This uses vLLM's CPU build, with no compile step and a small KV cache, so it fit
 about 5 GiB. An answer takes about 15 seconds. kind has room for one replica, so a second
 one waits as Pending.
 
+### Watch it
+
+Grafana shows vLLM's load, from the Prometheus that KEDA already uses. The dashboard is
+`deploy/grafana/vllm.json`: requests running and waiting, the KV cache, time to first
+token, time per output token, tokens per second and time in the queue.
+
+```sh
+kubectl create configmap grafana-dashboards -n monitoring --from-file=deploy/grafana/vllm.json
+helm install grafana grafana --repo https://grafana-community.github.io/helm-charts \
+  --version 14.4.0 --namespace monitoring -f deploy/grafana/values.yaml --wait
+```
+
+Then keep this running in its own terminal:
+
+```sh
+kubectl port-forward -n monitoring svc/grafana 3001:80
+```
+
+Open http://127.0.0.1:3001. Port 3001 leaves 3000, Grafana's default, free for a local
+Grafana. It has no login, because it is reached only through `port-forward`. The
+percentiles are estimates from Prometheus histogram buckets, so the numbers worth
+publishing come from `serving/benchmark.py`.
+
 ### Destroy it
 
 ```sh
