@@ -70,3 +70,15 @@ A second measurement, on another instance type or with other settings, gets a ru
 own. It never replaces the numbers or tags of the first. In the UI, the measurements are
 listed under the version's run in the `answerer` experiment, where they can be compared
 side by side.
+
+`record-benchmark` logs each line of a file from `serving/benchmark.py` as a run of its own,
+with the settings as params and the results as metrics. It reads the whole file before it
+logs anything, so a file with a bad line adds no runs. Running it twice on the same file
+logs every line twice. `benchmark-table` prints a version's benchmark runs as a Markdown
+table, fewest clients first:
+
+```sh
+uv run python -m serving.registry record-benchmark 4 notes/benchmark-v4.jsonl \
+  --tag measured_on g6.xlarge --tag capacity on-demand
+uv run python -m serving.registry benchmark-table 4
+```

@@ -1,7 +1,10 @@
 """Register open models as versions of one MLflow model, and choose which to serve."""
 
 import argparse
+import json
 import os
+from pathlib import Path
+from typing import Any
 
 import httpx
 import mlflow
@@ -11,6 +14,16 @@ from mlflow.exceptions import MlflowException
 
 MODEL_NAME = "answerer"
 DEFAULT_VLLM_ARGS = "--max-model-len=8192 --reasoning-parser=qwen3"
+# Table heading and the metric from serving.benchmark it shows.
+TABLE_COLUMNS = {
+    "Requests": "requests",
+    "TTFT p50 (ms)": "ttft_p50_ms",
+    "TTFT p95 (ms)": "ttft_p95_ms",
+    "TPOT p50 (ms)": "tpot_p50_ms",
+    "TPOT p95 (ms)": "tpot_p95_ms",
+    "Tokens/s": "output_tokens_per_second",
+    "Failed": "failed",
+}
 
 
 def connect() -> MlflowClient:
@@ -50,7 +63,11 @@ def register(client: MlflowClient, repo: str, vllm_args: str) -> str:
 
 
 def record(
-    client: MlflowClient, version: str, metrics: dict[str, float], tags: dict[str, str]
+    client: MlflowClient,
+    version: str,
+    metrics: dict[str, float],
+    tags: dict[str, str],
+    params: dict[str, Any] | None = None,
 ) -> str:
     # Each measurement is a run under the version's run, so none hides another.
     _, version_run = source_and_run(client.get_model_version(MODEL_NAME, version))
@@ -59,8 +76,47 @@ def record(
     with mlflow.start_run(
         experiment_id=experiment, parent_run_id=version_run, tags=tags
     ) as run:
+        # Params are the settings chosen, metrics the numbers measured.
+        if params:
+            mlflow.log_params(params)
         mlflow.log_metrics(metrics)
     return str(run.info.run_id)
+
+
+def record_benchmark(
+    client: MlflowClient, version: str, path: Path, tags: dict[str, str]
+) -> list[str]:
+    # One run per line from serving.benchmark. The whole file is read first,
+    # so a bad line adds no runs.
+    lines = [line for line in path.read_text().splitlines() if line.strip()]
+    measurements = [(m["settings"], m["results"]) for m in map(json.loads, lines)]
+    return [
+        record(client, version, results, {"kind": "benchmark", **tags}, settings)
+        for settings, results in measurements
+    ]
+
+
+def benchmark_table(client: MlflowClient, version: str) -> str:
+    # A version's benchmark runs as a Markdown table, fewest clients first.
+    _, version_run = source_and_run(client.get_model_version(MODEL_NAME, version))
+    experiment = client.get_run(version_run).info.experiment_id
+    found = client.search_runs(
+        [experiment],
+        f"tags.mlflow.parentRunId = '{version_run}' and tags.kind = 'benchmark'",
+    )
+    if not found:
+        raise SystemExit(f"Version {version} has no benchmark runs.")
+    runs = sorted(
+        found, key=lambda run: (int(run.data.params["clients"]), run.info.start_time)
+    )
+    rows = [
+        "| Clients | " + " | ".join(TABLE_COLUMNS) + " |",
+        "|" + " --- |" * (len(TABLE_COLUMNS) + 1),
+    ]
+    for run in runs:
+        values = [f"{run.data.metrics[name]:g}" for name in TABLE_COLUMNS.values()]
+        rows.append("| " + " | ".join([run.data.params["clients"], *values]) + " |")
+    return "\n".join(rows)
 
 
 def main() -> None:
@@ -86,15 +142,34 @@ def main() -> None:
         "--tag", nargs=2, action="append", default=[], metavar=("NAME", "VALUE")
     )
 
+    benchmark = commands.add_parser(
+        "record-benchmark", help="log each line of a serving.benchmark file as a run"
+    )
+    benchmark.add_argument("version")
+    benchmark.add_argument("path", type=Path)
+    benchmark.add_argument(
+        "--tag", nargs=2, action="append", default=[], metavar=("NAME", "VALUE")
+    )
+
+    table = commands.add_parser(
+        "benchmark-table", help="print a version's benchmark runs as a table"
+    )
+    table.add_argument("version")
+
     args = parser.parse_args()
     client = connect()
     if args.command == "register":
         print(register(client, args.repo, args.vllm_args))
     elif args.command == "alias":
         client.set_registered_model_alias(MODEL_NAME, args.alias, args.version)
-    else:
+    elif args.command == "record":
         metrics = {name: float(value) for name, value in args.metric}
         print(record(client, args.version, metrics, dict(args.tag)))
+    elif args.command == "record-benchmark":
+        run_ids = record_benchmark(client, args.version, args.path, dict(args.tag))
+        print(f"{len(run_ids)} runs recorded under version {args.version}")
+    else:
+        print(benchmark_table(client, args.version))
 
 
 if __name__ == "__main__":
