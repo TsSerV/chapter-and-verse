@@ -19,8 +19,10 @@ serve requests.
 Open models now run on a GPU in AWS, served by vLLM behind KServe on an EKS cluster that
 exists only while it is in use. Karpenter starts a GPU node when a model needs one, and
 KEDA adds a second replica under load. An MLflow model registry records which model is
-served, at which exact commit, with which settings. `/ask` does not use them yet. It still
-calls Claude.
+served, at which exact commit, with which settings. A benchmark in `serving/benchmark.py`
+measures time to first token, time per output token and throughput for each version, and
+each measurement is its own run in MLflow. `/ask` does not use the open models yet. It
+still calls Claude.
 
 There is no legislation corpus, no retrieval and no citations yet, so the answers today
 are only as good as the model's own knowledge.
@@ -34,6 +36,10 @@ how it was measured.
 | --- | --- | --- |
 | Requests of 8,192 tokens at once on one L4 | Qwen3-8B in bf16 | [2.80](docs/measurements.md#what-one-l4-holds) |
 | Requests of 8,192 tokens at once on one L4 | Qwen3-8B-FP8 | [8.39](docs/measurements.md#what-one-l4-holds) |
+| Time to first token at p95, 16 clients on one L4 | Qwen3-8B in bf16 | [23.7 seconds](docs/measurements.md#how-fast-it-answers) |
+| Time to first token at p95, 16 clients on one L4 | Qwen3-8B-FP8 | [2.5 seconds](docs/measurements.md#how-fast-it-answers) |
+| Output tokens per second, 16 clients on one L4 | Qwen3-8B in bf16 | [106.9](docs/measurements.md#how-fast-it-answers) |
+| Output tokens per second, 16 clients on one L4 | Qwen3-8B-FP8 | [151.4](docs/measurements.md#how-fast-it-answers) |
 | `kubectl apply` to a Ready model through KServe | Qwen3-1.7B | [485 seconds](docs/measurements.md#how-long-a-start-takes) |
 | Load start to a second replica Ready, on a new GPU node | Qwen3-1.7B | [512 seconds](docs/measurements.md#how-it-scales) |
 
