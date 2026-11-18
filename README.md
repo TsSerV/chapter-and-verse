@@ -189,7 +189,9 @@ src/chapter_and_verse/   the package
   models.py              request and response shapes, with input limits
   llm.py                 the Claude call and its retries, behind a small Answerer type
   legislation.py         downloads an Act from legislation.gov.uk and reads its sections
-  db.py                  the answers table and a database session per request
+  embeddings.py          text to vectors, with a small model on the CPU
+  ingest.py              loads an Act: sections, chunks and their vectors
+  db.py                  the answers, sections and chunks tables, and a database session per request
   config.py              settings read from the environment
   errors.py              exception types and the handlers that hide internals
   middleware.py          gives each request an ID for the logs and a header
