@@ -169,6 +169,16 @@ The tests never call Claude, so they need no key. Requests to the API are mocked
 SQLite file. A test also checks that every relative link in the README and in `docs/`
 leads to a file and a heading that exist.
 
+The search needs pgvector, so its tests run against a real Postgres, in a database of
+their own. They are skipped unless `TEST_DATABASE_URL` is set. CI sets it. To run them
+against the Postgres from Compose:
+
+```sh
+docker compose up -d db
+export TEST_DATABASE_URL="postgresql+asyncpg://postgres:$(grep '^POSTGRES_PASSWORD=' .env | cut -d= -f2-)@127.0.0.1:5433/postgres"
+uv run pytest
+```
+
 To run the same three checks CI runs:
 
 ```sh
@@ -191,6 +201,7 @@ src/chapter_and_verse/   the package
   legislation.py         downloads an Act from legislation.gov.uk and reads its sections
   embeddings.py          text to vectors, with a small model on the CPU
   ingest.py              loads an Act: sections, chunks and their vectors
+  retrieval.py           finds the sections closest in meaning to a question
   db.py                  the answers, sections and chunks tables, and a database session per request
   config.py              settings read from the environment
   errors.py              exception types and the handlers that hide internals
