@@ -1,4 +1,5 @@
 from collections.abc import AsyncIterator, Iterator
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -8,19 +9,40 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.pool import NullPool
 
 from chapter_and_verse.config import Settings, get_settings
-from chapter_and_verse.db import Base, get_session
+from chapter_and_verse.db import Base, Section, get_session
 from chapter_and_verse.llm import get_answerer
 from chapter_and_verse.main import app
+from chapter_and_verse.retrieval import get_retriever
 
 
-async def fake_answer(question: str) -> str:
-    return f"Fake answer to: {question}"
+async def fake_answer(prompt: str) -> str:
+    return f"Fake answer to: {prompt}"
+
+
+def fake_section(number: str, title: str, text: str) -> Section:
+    return Section(
+        act="ukpga/1996/18",
+        number=number,
+        title=title,
+        text=text,
+        uri=f"http://www.legislation.gov.uk/ukpga/1996/18/section/{number}",
+        valid_from=date(2026, 10, 30),
+    )
+
+
+async def fake_retrieve(question: str) -> list[Section]:
+    return [
+        fake_section("94", "The right.", "(1) An employee has the right..."),
+        fake_section("95", "Circumstances of dismissal.", "(1) For the purposes..."),
+    ]
 
 
 @pytest.fixture(autouse=True)
 def no_real_llm() -> Iterator[None]:
     # No test reaches Claude through the app unless it sets its own override.
     app.dependency_overrides[get_answerer] = lambda: fake_answer
+    # The real search needs Postgres and the embedding model. See test_retrieval.py.
+    app.dependency_overrides[get_retriever] = lambda: fake_retrieve
     yield
     app.dependency_overrides.clear()
 

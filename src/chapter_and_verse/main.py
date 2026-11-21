@@ -11,8 +11,9 @@ from structlog.typing import FilteringBoundLogger
 
 from chapter_and_verse.config import Settings, get_settings
 from chapter_and_verse.db import Answer, get_session
+from chapter_and_verse.embeddings import FastEmbedder
 from chapter_and_verse.errors import register_error_handlers
-from chapter_and_verse.llm import Answerer, get_answerer
+from chapter_and_verse.llm import Answerer, build_prompt, get_answerer
 from chapter_and_verse.middleware import add_request_id
 from chapter_and_verse.models import (
     AnswerRecord,
@@ -20,7 +21,9 @@ from chapter_and_verse.models import (
     AskResponse,
     ErrorResponse,
     HealthResponse,
+    Source,
 )
+from chapter_and_verse.retrieval import Retriever, get_retriever
 
 logger: FilteringBoundLogger = structlog.get_logger()
 
@@ -47,6 +50,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     engine = create_async_engine(settings.database_url)
     # Values stay loaded after commit. A hidden reload query would fail under asyncio.
     app.state.sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
+    # The embedding model, about 130 MB in memory. Loaded once, before the first request.
+    app.state.embedder = FastEmbedder()
     try:
         async with httpx.AsyncClient(
             timeout=settings.claude_timeout_seconds,
@@ -81,6 +86,7 @@ def health() -> HealthResponse:
 )
 async def ask(
     request: AskRequest,
+    retrieve: Annotated[Retriever, Depends(get_retriever)],
     answer: Annotated[Answerer, Depends(get_answerer)],
     session: Annotated[AsyncSession, Depends(get_session)],
     settings: Annotated[Settings, Depends(get_settings)],
@@ -88,7 +94,8 @@ async def ask(
     start = time.perf_counter()
     # The question is user input, so only its length is logged.
     try:
-        text = await answer(request.question)
+        sections = await retrieve(request.question)
+        text = await answer(build_prompt(request.question, sections))
     except Exception:
         logger.warning(
             "ask",
@@ -102,19 +109,24 @@ async def ask(
         "ask",
         outcome="ok",
         question_length=len(request.question),
+        sections=[section.number for section in sections],
         latency_ms=latency_ms,
     )
+    sources = [Source.model_validate(section) for section in sections]
     # Only successful answers are stored. A failed call is in the log with its request ID.
     row = Answer(
         request_id=structlog.contextvars.get_contextvars()["request_id"],
         question=request.question,
         answer=text,
+        sources=[source.model_dump(mode="json") for source in sources],
         model=settings.claude_model,
         latency_ms=latency_ms,
     )
     session.add(row)
     await session.commit()
-    return AskResponse(answer_id=row.id, answer=text, latency_ms=latency_ms)
+    return AskResponse(
+        answer_id=row.id, answer=text, sources=sources, latency_ms=latency_ms
+    )
 
 
 @app.get(

@@ -37,6 +37,9 @@ async def test_ask_stores_the_answer_and_reads_it_back(
     assert record["id"] == answer_id
     assert record["question"] == QUESTION
     assert record["answer"] == asked.json()["answer"]
+    # The sections are kept with the answer, each with the date its text is in force from.
+    assert record["sources"] == asked.json()["sources"]
+    assert record["sources"][0]["valid_from"] == "2026-10-30"
     assert record["model"] == test_settings.claude_model
     assert record["request_id"] == asked.headers["X-Request-ID"]
     assert record["latency_ms"] == asked.json()["latency_ms"]

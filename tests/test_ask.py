@@ -8,11 +8,27 @@ from chapter_and_verse.main import app
 client = TestClient(app)
 
 
-def test_ask_returns_the_answerer_text() -> None:
-    response = client.post("/ask", json={"question": "What is the Equality Act 2010?"})
+def test_ask_gives_the_answerer_the_sections_then_the_question() -> None:
+    response = client.post("/ask", json={"question": "Can I be dismissed unfairly?"})
 
     assert response.status_code == 200
-    assert response.json()["answer"] == "Fake answer to: What is the Equality Act 2010?"
+    answer = response.json()["answer"]
+    assert answer.startswith("Fake answer to: Section 94. The right.\n(1) An employee")
+    assert answer.endswith("Question: Can I be dismissed unfairly?")
+
+
+def test_ask_returns_the_sections_it_answered_from() -> None:
+    response = client.post("/ask", json={"question": "Can I be dismissed unfairly?"})
+
+    sources = response.json()["sources"]
+    assert [source["number"] for source in sources] == ["94", "95"]
+    assert sources[0] == {
+        "act": "ukpga/1996/18",
+        "number": "94",
+        "title": "The right.",
+        "uri": "http://www.legislation.gov.uk/ukpga/1996/18/section/94",
+        "valid_from": "2026-10-30",
+    }
 
 
 def test_ask_returns_503_when_upstream_fails() -> None:

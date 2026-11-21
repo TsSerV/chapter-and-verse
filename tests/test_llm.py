@@ -14,7 +14,9 @@ from chapter_and_verse.llm import (
     MESSAGES_URL,
     _post_to_claude,
     ask_claude,
+    build_prompt,
 )
+from tests.conftest import fake_section
 
 pytestmark = pytest.mark.anyio
 
@@ -140,3 +142,27 @@ async def test_unreadable_reply_raises_upstream_unavailable(
 
     with pytest.raises(UpstreamUnavailable):
         await ask_claude(QUESTION, settings, client)
+
+
+def test_prompt_has_each_section_then_the_question() -> None:
+    sections = [
+        fake_section("94", "The right.", "(1) An employee has the right..."),
+        fake_section(
+            "108", "Qualifying period of employment.", "(1) Section 94 does not apply..."
+        ),
+    ]
+
+    prompt = build_prompt("Can I be dismissed unfairly?", sections)
+
+    assert prompt == (
+        "Section 94. The right.\n(1) An employee has the right...\n\n"
+        "Section 108. Qualifying period of employment.\n"
+        "(1) Section 94 does not apply...\n\n"
+        "Question: Can I be dismissed unfairly?"
+    )
+
+
+def test_prompt_without_sections_is_only_the_question() -> None:
+    assert build_prompt("Can I be dismissed unfairly?", []) == (
+        "Question: Can I be dismissed unfairly?"
+    )

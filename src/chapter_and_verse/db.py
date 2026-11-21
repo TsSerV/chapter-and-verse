@@ -42,6 +42,8 @@ class Answer(Base):
     # Stored here, never logged. A table has access control, log lines get copied.
     question: Mapped[str] = mapped_column(Text)
     answer: Mapped[str] = mapped_column(Text)
+    # The sections the model was given, each with the date its text is in force from.
+    sources: Mapped[list[dict[str, str]]] = mapped_column(JSON, server_default="[]")
     # Which model wrote the answer.
     model: Mapped[str]
     latency_ms: Mapped[int]

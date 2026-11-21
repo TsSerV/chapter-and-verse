@@ -1,9 +1,18 @@
 """Find the sections of the Act that are closest in meaning to a question."""
 
+import asyncio
+from collections.abc import Awaitable, Callable
+from typing import Annotated
+
+from fastapi import Depends, Request
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from chapter_and_verse.db import Chunk, Section
+from chapter_and_verse.db import Chunk, Section, get_session
+from chapter_and_verse.embeddings import Embedder
+
+# Takes a question, returns the sections to answer it from, closest first.
+Retriever = Callable[[str], Awaitable[list[Section]]]
 
 
 async def nearest_sections(
@@ -25,3 +34,21 @@ async def nearest_sections(
         .order_by(closest.c.distance)
     )
     return list(rows)
+
+
+def get_embedder(request: Request) -> Embedder:
+    # Loaded once in the app lifespan, see main.py.
+    embedder: Embedder = request.app.state.embedder
+    return embedder
+
+
+def get_retriever(
+    session: Annotated[AsyncSession, Depends(get_session)],
+    embedder: Annotated[Embedder, Depends(get_embedder)],
+) -> Retriever:
+    async def retrieve(question: str) -> list[Section]:
+        # The model runs on the CPU for a few milliseconds, so off the event loop.
+        embedding = await asyncio.to_thread(embedder.query, question)
+        return await nearest_sections(session, embedding)
+
+    return retrieve
