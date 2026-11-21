@@ -13,6 +13,11 @@ COPY . /app
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --no-dev --no-editable
 
+# The embedding model goes into the image, so a pod starts without the network.
+ENV FASTEMBED_CACHE_PATH=/app/models
+RUN /app/.venv/bin/python -c "from chapter_and_verse.embeddings import FastEmbedder; FastEmbedder()" \
+    && chmod -R a+rX /app/models
+
 FROM python:3.13-slim-trixie@sha256:e48f59cdba69a3cbd9ed2cf0f348d90d45a8d350d98134cf1070bc106ee9ed90
 
 RUN groupadd --system --gid 999 app \
@@ -21,7 +26,13 @@ RUN groupadd --system --gid 999 app \
 WORKDIR /app
 
 COPY --from=builder /app/.venv /app/.venv
-ENV PATH="/app/.venv/bin:$PATH"
+COPY --from=builder /app/models /app/models
+# Read the model from the image, never ask Hugging Face for a newer one, and send no
+# usage data from onnxruntime, which runs the model.
+ENV PATH="/app/.venv/bin:$PATH" \
+    FASTEMBED_CACHE_PATH=/app/models \
+    HF_HUB_OFFLINE=1 \
+    ORT_DISABLE_TELEMETRY=1
 
 # `alembic upgrade head` runs from /app, where it finds alembic.ini.
 COPY alembic.ini ./
