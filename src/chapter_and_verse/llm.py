@@ -12,23 +12,30 @@ from tenacity import (
 )
 
 from chapter_and_verse.config import Settings, get_settings
+from chapter_and_verse.db import Section
 from chapter_and_verse.errors import UpstreamUnavailable
 
 MESSAGES_URL = "https://api.anthropic.com/v1/messages"
 ANTHROPIC_VERSION = "2023-06-01"
 MAX_TOKENS = 4096
 SYSTEM_PROMPT = (
-    "You answer questions about UK legislation. Answer briefly and plainly. "
-    "If you are not sure, say so."
+    "You answer questions about UK legislation, using only the sections given in the "
+    "message. Answer briefly and plainly. After each claim, cite the section it comes "
+    "from in square brackets, for example [s. 94(1)]. If the sections do not answer "
+    "the question, say that you cannot answer it from them, and cite nothing."
 )
 
-# Takes a question, returns an answer. The endpoint depends on this, not on Claude.
+# Takes a prompt, returns an answer. The endpoint depends on this, not on Claude.
 Answerer = Callable[[str], Awaitable[str]]
 
 
-async def ask_claude(
-    question: str, settings: Settings, client: httpx.AsyncClient
-) -> str:
+def build_prompt(question: str, sections: list[Section]) -> str:
+    # The sections first, the question last, where the model reads it best.
+    parts = [f"Section {s.number}. {s.title}\n{s.text}" for s in sections]
+    return "\n\n".join([*parts, f"Question: {question}"])
+
+
+async def ask_claude(prompt: str, settings: Settings, client: httpx.AsyncClient) -> str:
     headers = {
         "x-api-key": settings.claude_api_token.get_secret_value(),
         "anthropic-version": ANTHROPIC_VERSION,
@@ -37,7 +44,7 @@ async def ask_claude(
         "model": settings.claude_model,
         "max_tokens": MAX_TOKENS,
         "system": SYSTEM_PROMPT,
-        "messages": [{"role": "user", "content": question}],
+        "messages": [{"role": "user", "content": prompt}],
     }
     try:
         response = await _post_to_claude(client, headers, body)
