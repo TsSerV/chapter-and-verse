@@ -8,13 +8,15 @@ If no provision supports a claim, it will not answer.
 
 ## Status
 
-Early. Currently an HTTP API with three endpoints. `POST /ask` sends the question to
-Claude and returns the reply. All requests share one pooled connection to Claude. A call
-that gets no response, such as a timeout or a dropped connection, is retried up to three
-times with backoff. An error status from Claude is not retried. Every successful answer
-is stored with its question, model, latency and request ID, and
-`GET /answers/{answer_id}` reads it back. `GET /health` reports that the process can
-serve requests.
+Early. Currently an HTTP API with three endpoints. `POST /ask` finds the sections of the
+Employment Rights Act 1996 closest in meaning to the question, gives them to Claude with
+the question, and returns the answer with a citation after each claim and the sections it
+was given. All requests share one pooled connection to Claude. A call that gets no
+response, such as a timeout or a dropped connection, is retried up to three times with
+backoff. An error status from Claude is not retried. Every successful answer is stored
+with its question, the sections it was given and the date their text is in force from,
+the model, latency and request ID, and `GET /answers/{answer_id}` reads it back.
+`GET /health` reports that the process can serve requests.
 
 Open models now run on a GPU in AWS, served by vLLM behind KServe on an EKS cluster that
 exists only while it is in use. Karpenter starts a GPU node when a model needs one, and
@@ -24,8 +26,11 @@ measures time to first token, time per output token and throughput for each vers
 each measurement is its own run in MLflow. `/ask` does not use the open models yet. It
 still calls Claude.
 
-There is no legislation corpus, no retrieval and no citations yet, so the answers today
-are only as good as the model's own knowledge.
+One Act is loaded: the Employment Rights Act 1996, 410 sections at the version in force
+from 30 October 2026. The citations are not checked yet. Nothing verifies that a cited
+section says what the answer claims, and the service does not refuse on its own when the
+sections do not hold the answer. Both come next. [How it answers](docs/answers.md) has the
+steps and a first look at the results.
 
 ## Results
 
@@ -72,20 +77,35 @@ Compose starts Postgres and waits until it is healthy. Then it applies the migra
 starts the API. The data stays in a Docker volume between runs. `docker compose down -v`
 deletes it.
 
+Load the Act once, from a second terminal. It stays in the volume:
+
+```sh
+docker compose run --rm api python -m chapter_and_verse.ingest ukpga/1996/18
+```
+
 ### With uv, for development
 
 You need [uv](https://docs.astral.sh/uv/getting-started/installation/). It installs
-Python 3.13 for you.
+Python 3.13 for you. You also need Docker, because `/ask` searches with pgvector and the
+Postgres from Compose has it.
 
 ```sh
 uv sync
 ```
 
-Create the database. Unless you set `DATABASE_URL`, it is a SQLite file in the project
-folder:
+Set `POSTGRES_PASSWORD` in `.env` as for Compose. Start Postgres, and point the service at
+it for this terminal. Compose publishes it on port 5433, on your own machine only:
+
+```sh
+docker compose up -d db
+export DATABASE_URL="postgresql+asyncpg://postgres:$(grep '^POSTGRES_PASSWORD=' .env | cut -d= -f2-)@127.0.0.1:5433/postgres"
+```
+
+Create the tables and load the Act. The first run also downloads the embedding model:
 
 ```sh
 uv run alembic upgrade head
+uv run python -m chapter_and_verse.ingest ukpga/1996/18
 ```
 
 Then start the server. `--reload` restarts it when you change the code:
@@ -93,6 +113,9 @@ Then start the server. `--reload` restarts it when you change the code:
 ```sh
 uv run uvicorn chapter_and_verse.main:app --reload
 ```
+
+Without `DATABASE_URL` the service uses a SQLite file, which is enough for the unit tests
+and not for `/ask`.
 
 ### Ask it something
 
@@ -102,23 +125,45 @@ from your own machine.
 ```sh
 curl -X POST http://127.0.0.1:8000/ask \
   -H "Content-Type: application/json" \
-  -d '{"question": "When did the Data Protection Act 2018 come into force?"}'
+  -d '{"question": "How much notice must my employer give me before ending my job?"}'
 ```
 
-The reply looks like this:
+The reply looks like this. `sources` has five sections, cut to two here:
 
 ```json
-{"answer_id": 1, "answer": "On 25 May 2018.", "latency_ms": 1432}
+{
+  "answer_id": 2,
+  "answer": "The notice your employer must give you depends on your length of continuous employment:\n\n- **Less than 2 years**: at least one week's notice [s. 86(1)(a)]\n- **2 years or more but less than 12 years**: at least one week's notice for each year of continuous employment [s. 86(1)(b)]\n- **12 years or more**: at least twelve weeks' notice [s. 86(1)(c)]\n\nThese requirements apply if you have been continuously employed for one month or more [s. 86(1)].",
+  "sources": [
+    {"act": "ukpga/1996/18", "number": "86", "title": "Rights of employer and employee to minimum notice.", "uri": "http://www.legislation.gov.uk/ukpga/1996/18/section/86", "valid_from": "2026-10-30"},
+    {"act": "ukpga/1996/18", "number": "150", "title": "Resignation.", "uri": "http://www.legislation.gov.uk/ukpga/1996/18/section/150", "valid_from": "2026-10-30"}
+  ],
+  "latency_ms": 1885
+}
 ```
 
 Read the stored answer back by its ID:
 
 ```sh
-curl http://127.0.0.1:8000/answers/1
+curl http://127.0.0.1:8000/answers/2
 ```
 
+It has the same answer and sources, shortened here, with the question, the model, the
+request ID and the time it was stored:
+
 ```json
-{"id": 1, "request_id": "5f0c2d1e-8a47-4b8e-9d3a-2e61c7f4b0a9", "question": "When did the Data Protection Act 2018 come into force?", "answer": "On 25 May 2018.", "model": "claude-haiku-4-5", "latency_ms": 1432, "created_at": "2026-09-27T08:01:32"}
+{
+  "id": 2,
+  "request_id": "c901bdff-2706-451f-ba0c-1c74adf31b2f",
+  "question": "How much notice must my employer give me before ending my job?",
+  "answer": "The notice your employer must give you depends on your length of continuous employment: ...",
+  "sources": [
+    {"act": "ukpga/1996/18", "number": "86", "title": "Rights of employer and employee to minimum notice.", "uri": "http://www.legislation.gov.uk/ukpga/1996/18/section/86", "valid_from": "2026-10-30"}
+  ],
+  "model": "claude-haiku-4-5",
+  "latency_ms": 1885,
+  "created_at": "2026-11-21T15:43:51.634819Z"
+}
 ```
 
 An ID that does not exist returns 404.
@@ -128,10 +173,10 @@ Logs are structured JSON, one object per line. Every line written during a reque
 quote it when you report a problem. One `/ask` call logs a line like this:
 
 ```json
-{"outcome": "ok", "question_length": 54, "latency_ms": 1432, "event": "ask", "request_id": "5f0c2d1e-8a47-4b8e-9d3a-2e61c7f4b0a9", "level": "info", "timestamp": "2026-09-27T08:01:32.740200Z"}
+{"outcome": "ok", "question_length": 62, "sections": ["86", "150", "52", "142", "136"], "latency_ms": 1885, "event": "ask", "request_id": "c901bdff-2706-451f-ba0c-1c74adf31b2f", "level": "info", "timestamp": "2026-11-21T15:43:53.521307Z"}
 ```
 
-The question itself is never logged, only its length.
+The question itself is never logged, only its length and the sections found for it.
 
 Interactive API docs are at http://127.0.0.1:8000/docs.
 
@@ -145,11 +190,17 @@ them from `values.yaml` and [the two Secrets](docs/kubernetes.md).
 | `CLAUDE_API_TOKEN` | yes | none | Your Claude API key. |
 | `CLAUDE_MODEL` | no | `claude-haiku-4-5` | Which model answers. |
 | `CLAUDE_TIMEOUT_SECONDS` | no | `60.0` | How long to wait for Claude. |
-| `DATABASE_URL` | no | `sqlite+aiosqlite:///./chapter_and_verse.db` | Which database to use. Compose sets it to its own Postgres. |
+| `DATABASE_URL` | no | `sqlite+aiosqlite:///./chapter_and_verse.db` | Which database to use. `/ask` needs Postgres with pgvector. Compose sets it to its own Postgres. |
 | `POSTGRES_PASSWORD` | with compose or kind | none | Password for Postgres. Compose passes it to its container. On kind, it goes into the `postgres` Secret. |
+| `TEST_DATABASE_URL` | no | none | A Postgres server for the retrieval tests. They create and drop a database of their own on it. |
+| `FASTEMBED_CACHE_PATH` | no | the temp folder | Where the embedding model is kept. The image sets it to the copy inside the image. |
+
+The last two are read from the environment only, not from `.env`.
 
 ## Guides
 
+- [How it answers](docs/answers.md): loading an Act, finding sections, and a first look at
+  the results.
 - [Running on Kubernetes](docs/kubernetes.md): the service on a local kind cluster.
 - [Registering models in MLflow](docs/model-registry.md): which model is served, at which
   commit, with which settings.
@@ -197,7 +248,7 @@ the Terraform, with no AWS credentials.
 src/chapter_and_verse/   the package
   main.py                FastAPI app, startup (client pool, database, logging), the endpoints
   models.py              request and response shapes, with input limits
-  llm.py                 the Claude call and its retries, behind a small Answerer type
+  llm.py                 the prompt, the Claude call and its retries, behind a small Answerer type
   legislation.py         downloads an Act from legislation.gov.uk and reads its sections
   embeddings.py          text to vectors, with a small model on the CPU
   ingest.py              loads an Act: sections, chunks and their vectors
@@ -209,7 +260,7 @@ src/chapter_and_verse/   the package
 tests/                   tests per module, a concurrency test, shared fixtures
 migrations/              Alembic migrations, one file per schema change
 Dockerfile               two-stage image that runs as a non-root user
-compose.yaml             Postgres, then the migrations, then the API
+compose.yaml             Postgres with pgvector, then the migrations, then the API
 charts/                  Helm chart: migrations as a Job, then the API and its Service
 serving/                 registry commands, KServe manifests from an alias, a load generator, and a benchmark
 deploy/kind/             Postgres for a local kind cluster only
@@ -217,7 +268,7 @@ deploy/mlflow/           the MLflow server for the model registry, on your own m
 deploy/grafana/          Grafana settings and the dashboard for vLLM
 deploy/aws/              Karpenter's GPU node pool, and the GPU check Job, for EKS
 infra/aws/               Terraform for a temporary EKS cluster, and the IAM and queue for Karpenter
-docs/                    guides for kind, the model registry and the GPU cluster, and the measurements
+docs/                    how it answers, guides for kind, the model registry and the GPU cluster, and the measurements
 .github/workflows/       CI: the checks, the image build, the chart lint, the Terraform checks
 ```
 
