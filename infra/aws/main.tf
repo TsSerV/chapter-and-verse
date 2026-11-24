@@ -4,7 +4,7 @@ data "aws_availability_zones" "available" {
 
 module "vpc" {
   source  = "terraform-aws-modules/vpc/aws"
-  version = "6.7.3"
+  version = "6.8.0"
 
   name = var.name
   cidr = "10.0.0.0/16"
@@ -23,7 +23,7 @@ module "vpc" {
 
 module "eks" {
   source  = "terraform-aws-modules/eks/aws"
-  version = "21.29.0"
+  version = "21.30.2"
 
   name               = var.name
   kubernetes_version = "1.37"
@@ -71,7 +71,7 @@ module "eks" {
 # interruptions. The GPU nodes themselves come from the NodePool in deploy/aws/karpenter.yaml.
 module "karpenter" {
   source  = "terraform-aws-modules/eks/aws//modules/karpenter"
-  version = "21.29.0"
+  version = "21.30.2"
 
   cluster_name = module.eks.cluster_name
 
