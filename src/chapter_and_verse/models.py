@@ -1,4 +1,5 @@
 from datetime import date, datetime
+from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -29,6 +30,31 @@ class Source(BaseModel):
     valid_from: date = Field(
         description="This version of the text is in force from here."
     )
+
+
+class Verdict(StrEnum):
+    """What the check of one claim found."""
+
+    VERIFIED = "verified"
+    # The claim cites a section the model was not given.
+    UNKNOWN_SECTION = "unknown_section"
+    QUOTE_TOO_SHORT = "quote_too_short"
+    # The words are not in the cited section, in that order.
+    QUOTE_NOT_FOUND = "quote_not_found"
+
+
+class Claim(BaseModel):
+    """One statement of an answer, with the words of the Act it rests on."""
+
+    text: str = Field(description="One statement, in plain words.")
+    section: str = Field(
+        description="The number of the section it comes from.", examples=["86"]
+    )
+    quote: str = Field(description="Words copied from that section.")
+
+
+class CheckedClaim(Claim):
+    verdict: Verdict = Field(description="What the check of the quote found.")
 
 
 class AskResponse(BaseModel):
