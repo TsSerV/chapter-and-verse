@@ -7,6 +7,7 @@ from structlog.testing import capture_logs
 
 from chapter_and_verse.llm import get_answerer
 from chapter_and_verse.main import app
+from tests.conftest import fake_answer
 
 pytestmark = pytest.mark.anyio
 
@@ -18,7 +19,7 @@ DELAY_SECONDS = 0.2
 async def slow_fake_answer(question: str) -> str:
     # Waits without blocking the event loop, like the real call to Claude.
     await asyncio.sleep(DELAY_SECONDS)
-    return f"Fake answer to: {question}"
+    return await fake_answer(question)
 
 
 async def ask_all_at_once() -> list[httpx.Response]:
@@ -41,7 +42,7 @@ async def test_concurrent_requests_overlap() -> None:
             all_inside.set()
         # Returns only when all five are inside at once. One at a time would time out.
         await asyncio.wait_for(all_inside.wait(), timeout=5)
-        return f"Fake answer to: {question}"
+        return await fake_answer(question)
 
     app.dependency_overrides[get_answerer] = lambda: wait_for_the_others
     responses = await ask_all_at_once()

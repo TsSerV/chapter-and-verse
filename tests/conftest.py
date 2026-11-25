@@ -1,3 +1,4 @@
+import json
 from collections.abc import AsyncIterator, Iterator
 from datetime import date
 from pathlib import Path
@@ -14,9 +15,16 @@ from chapter_and_verse.llm import get_answerer
 from chapter_and_verse.main import app
 from chapter_and_verse.retrieval import get_retriever
 
+# One claim, with words that are in section 94 as fake_retrieve returns it.
+FAKE_CLAIM = {
+    "text": "An employee has the right not to be unfairly dismissed.",
+    "section": "94",
+    "quote": "the right not to be unfairly dismissed",
+}
+
 
 async def fake_answer(prompt: str) -> str:
-    return f"Fake answer to: {prompt}"
+    return json.dumps({"claims": [FAKE_CLAIM]})
 
 
 def fake_section(number: str, title: str, text: str) -> Section:
@@ -32,7 +40,11 @@ def fake_section(number: str, title: str, text: str) -> Section:
 
 async def fake_retrieve(question: str) -> list[Section]:
     return [
-        fake_section("94", "The right.", "(1) An employee has the right..."),
+        fake_section(
+            "94",
+            "The right.",
+            "(1) An employee has the right not to be unfairly dismissed by his employer.",
+        ),
         fake_section("95", "Circumstances of dismissal.", "(1) For the purposes..."),
     ]
 

@@ -13,7 +13,13 @@ from chapter_and_verse.config import Settings, get_settings
 from chapter_and_verse.db import Answer, get_session
 from chapter_and_verse.embeddings import FastEmbedder
 from chapter_and_verse.errors import register_error_handlers
-from chapter_and_verse.llm import Answerer, build_prompt, get_answerer
+from chapter_and_verse.llm import (
+    Answerer,
+    build_prompt,
+    get_answerer,
+    parse_draft,
+    write_answer,
+)
 from chapter_and_verse.middleware import add_request_id
 from chapter_and_verse.models import (
     AnswerRecord,
@@ -95,7 +101,7 @@ async def ask(
     # The question is user input, so only its length is logged.
     try:
         sections = await retrieve(request.question)
-        text = await answer(build_prompt(request.question, sections))
+        claims = parse_draft(await answer(build_prompt(request.question, sections)))
     except Exception:
         logger.warning(
             "ask",
@@ -110,8 +116,10 @@ async def ask(
         outcome="ok",
         question_length=len(request.question),
         sections=[section.number for section in sections],
+        claims=len(claims),
         latency_ms=latency_ms,
     )
+    text = write_answer(claims)
     sources = [Source.model_validate(section) for section in sections]
     # Only successful answers are stored. A failed call is in the log with its request ID.
     row = Answer(
@@ -125,7 +133,11 @@ async def ask(
     session.add(row)
     await session.commit()
     return AskResponse(
-        answer_id=row.id, answer=text, sources=sources, latency_ms=latency_ms
+        answer_id=row.id,
+        answer=text,
+        claims=claims,
+        sources=sources,
+        latency_ms=latency_ms,
     )
 
 
