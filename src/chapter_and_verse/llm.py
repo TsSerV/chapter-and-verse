@@ -1,9 +1,10 @@
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from functools import partial
 from typing import Annotated, Any
 
 import httpx
 from fastapi import Depends, Request
+from pydantic import ValidationError
 from tenacity import (
     retry,
     retry_if_exception_type,
@@ -14,18 +15,44 @@ from tenacity import (
 from chapter_and_verse.config import Settings, get_settings
 from chapter_and_verse.db import Section
 from chapter_and_verse.errors import UpstreamUnavailable
+from chapter_and_verse.models import Claim, Draft
 
 MESSAGES_URL = "https://api.anthropic.com/v1/messages"
 ANTHROPIC_VERSION = "2023-06-01"
 MAX_TOKENS = 4096
 SYSTEM_PROMPT = (
     "You answer questions about UK legislation, using only the sections given in the "
-    "message. Answer briefly and plainly. After each claim, cite the section it comes "
-    "from in square brackets, for example [s. 94(1)]. If the sections do not answer "
-    "the question, say that you cannot answer it from them, and cite nothing."
+    "message. Answer as a list of claims. Each claim has three parts. text: one short, "
+    "plain statement. section: the number of the section it comes from, as in its "
+    "heading, for example 94 or 43B. quote: at least five words copied exactly from "
+    "that section, in one unbroken run, that say what the claim says. If the sections "
+    "do not answer the question, return no claims."
 )
+# The reply must be JSON of this shape. Claude builds it under the schema, so it parses.
+DRAFT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "claims": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "text": {"type": "string"},
+                    "section": {"type": "string"},
+                    "quote": {"type": "string"},
+                },
+                "required": ["text", "section", "quote"],
+                "additionalProperties": False,
+            },
+        }
+    },
+    "required": ["claims"],
+    "additionalProperties": False,
+}
+CANNOT_ANSWER = "I cannot answer this from the sections of the Act that I found."
 
-# Takes a prompt, returns an answer. The endpoint depends on this, not on Claude.
+# Takes a prompt, returns the model's reply as JSON text. The endpoint depends on this,
+# not on Claude.
 Answerer = Callable[[str], Awaitable[str]]
 
 
@@ -44,6 +71,7 @@ async def ask_claude(prompt: str, settings: Settings, client: httpx.AsyncClient)
         "model": settings.claude_model,
         "max_tokens": MAX_TOKENS,
         "system": SYSTEM_PROMPT,
+        "output_config": {"format": {"type": "json_schema", "schema": DRAFT_SCHEMA}},
         "messages": [{"role": "user", "content": prompt}],
     }
     try:
@@ -87,6 +115,21 @@ def extract_text(response: httpx.Response) -> str:
             f"No text in reply, stop_reason={data.get('stop_reason')}"
         )
     return "".join(texts)
+
+
+def parse_draft(text: str) -> list[Claim]:
+    try:
+        return Draft.model_validate_json(text).claims
+    except ValidationError as exc:
+        # Cut off at max_tokens, or a model that does not follow the schema.
+        raise UpstreamUnavailable("The model sent claims we cannot read") from exc
+
+
+def write_answer(claims: Sequence[Claim]) -> str:
+    # Sequence, so a list of a Claim subclass is accepted too.
+    if not claims:
+        return CANNOT_ANSWER
+    return " ".join(f"{claim.text} [s. {claim.section}]" for claim in claims)
 
 
 def get_http_client(request: Request) -> httpx.AsyncClient:

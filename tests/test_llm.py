@@ -11,11 +11,16 @@ from chapter_and_verse.config import Settings
 from chapter_and_verse.errors import UpstreamUnavailable
 from chapter_and_verse.llm import (
     ANTHROPIC_VERSION,
+    CANNOT_ANSWER,
+    DRAFT_SCHEMA,
     MESSAGES_URL,
     _post_to_claude,
     ask_claude,
     build_prompt,
+    parse_draft,
+    write_answer,
 )
+from chapter_and_verse.models import Claim, Draft
 from tests.conftest import fake_section
 
 pytestmark = pytest.mark.anyio
@@ -70,6 +75,10 @@ async def test_returns_text_from_reply(
     body = json.loads(sent.content)
     assert body["model"] == "test-model"
     assert body["messages"] == [{"role": "user", "content": QUESTION}]
+    # The reply is asked for as JSON of the claims shape.
+    assert body["output_config"] == {
+        "format": {"type": "json_schema", "schema": DRAFT_SCHEMA}
+    }
 
 
 @respx.mock
@@ -166,3 +175,46 @@ def test_prompt_without_sections_is_only_the_question() -> None:
     assert build_prompt("Can I be dismissed unfairly?", []) == (
         "Question: Can I be dismissed unfairly?"
     )
+
+
+def test_schema_has_the_fields_of_the_models() -> None:
+    # The schema is written by hand, so this fails when a model gains or loses a field.
+    claims = DRAFT_SCHEMA["properties"]["claims"]
+
+    assert set(DRAFT_SCHEMA["properties"]) == set(Draft.model_fields)
+    assert set(claims["items"]["properties"]) == set(Claim.model_fields)
+    assert set(claims["items"]["required"]) == set(Claim.model_fields)
+
+
+def test_parse_draft_reads_the_claims() -> None:
+    text = '{"claims": [{"text": "A right.", "section": "94", "quote": "has the right"}]}'
+
+    assert parse_draft(text) == [
+        Claim(text="A right.", section="94", quote="has the right")
+    ]
+    assert parse_draft('{"claims": []}') == []
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Section 94 gives the right.",
+        '{"claims": [{"text": "A right.", "section": "94"',
+        '{"claims": [{"text": "A right."}]}',
+    ],
+)
+def test_parse_draft_rejects_a_reply_that_is_not_claims(text: str) -> None:
+    with pytest.raises(UpstreamUnavailable):
+        parse_draft(text)
+
+
+def test_write_answer_cites_the_section_after_each_claim() -> None:
+    claims = [
+        Claim(text="An employee has the right.", section="94", quote="has the right"),
+        Claim(text="It needs two years.", section="108", quote="not less than two years"),
+    ]
+
+    assert write_answer(claims) == (
+        "An employee has the right. [s. 94] It needs two years. [s. 108]"
+    )
+    assert write_answer([]) == CANNOT_ANSWER

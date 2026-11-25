@@ -4,17 +4,59 @@ from structlog.testing import capture_logs
 from chapter_and_verse.errors import UpstreamUnavailable
 from chapter_and_verse.llm import get_answerer
 from chapter_and_verse.main import app
+from tests.conftest import FAKE_CLAIM, fake_answer
 
 client = TestClient(app)
 
 
 def test_ask_gives_the_answerer_the_sections_then_the_question() -> None:
+    prompts: list[str] = []
+
+    async def spy(prompt: str) -> str:
+        prompts.append(prompt)
+        return await fake_answer(prompt)
+
+    app.dependency_overrides[get_answerer] = lambda: spy
+
     response = client.post("/ask", json={"question": "Can I be dismissed unfairly?"})
 
     assert response.status_code == 200
-    answer = response.json()["answer"]
-    assert answer.startswith("Fake answer to: Section 94. The right.\n(1) An employee")
-    assert answer.endswith("Question: Can I be dismissed unfairly?")
+    assert prompts[0].startswith("Section 94. The right.\n(1) An employee has the right")
+    assert prompts[0].endswith("Question: Can I be dismissed unfairly?")
+
+
+def test_ask_returns_the_claims_and_an_answer_built_from_them() -> None:
+    response = client.post("/ask", json={"question": "Can I be dismissed unfairly?"})
+
+    body = response.json()
+    assert body["claims"] == [FAKE_CLAIM]
+    assert body["answer"] == (
+        "An employee has the right not to be unfairly dismissed. [s. 94]"
+    )
+
+
+def test_ask_says_it_cannot_answer_when_there_are_no_claims() -> None:
+    async def no_claims(prompt: str) -> str:
+        return '{"claims": []}'
+
+    app.dependency_overrides[get_answerer] = lambda: no_claims
+
+    response = client.post("/ask", json={"question": "What is the speed limit?"})
+
+    assert response.status_code == 200
+    assert response.json()["claims"] == []
+    assert response.json()["answer"].startswith("I cannot answer this")
+
+
+def test_ask_returns_503_when_the_reply_is_not_claims() -> None:
+    async def not_json(prompt: str) -> str:
+        return "Section 94 gives the right."
+
+    app.dependency_overrides[get_answerer] = lambda: not_json
+
+    response = client.post("/ask", json={"question": "Can I be dismissed unfairly?"})
+
+    assert response.status_code == 503
 
 
 def test_ask_returns_the_sections_it_answered_from() -> None:

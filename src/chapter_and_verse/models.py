@@ -57,11 +57,18 @@ class CheckedClaim(Claim):
     verdict: Verdict = Field(description="What the check of the quote found.")
 
 
+class Draft(BaseModel):
+    """What the model returns: the claims of its answer, before any check."""
+
+    claims: list[Claim]
+
+
 class AskResponse(BaseModel):
     answer_id: int = Field(description="Use it to read the answer back later.")
     answer: str = Field(
         description="The answer, with the section cited after each claim."
     )
+    claims: list[Claim] = Field(description="The answer, one claim at a time.")
     sources: list[Source] = Field(description="The sections given to the model.")
     latency_ms: int = Field(ge=0, description="Time taken to build the answer.")
 
