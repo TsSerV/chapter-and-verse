@@ -28,8 +28,10 @@ from chapter_and_verse.models import (
     ErrorResponse,
     HealthResponse,
     Source,
+    Status,
 )
 from chapter_and_verse.retrieval import Retriever, get_retriever
+from chapter_and_verse.verify import all_verified, verify
 
 logger: FilteringBoundLogger = structlog.get_logger()
 
@@ -110,16 +112,22 @@ async def ask(
             latency_ms=elapsed_ms(start),
         )
         raise
+    # The check uses the same sections the model was given.
+    checked = verify(claims, sections)
+    status = Status.ANSWERED if all_verified(checked) else Status.REFUSED
+    # A refused reply repeats none of the claims. The log keeps what each check found.
+    shown = checked if status is Status.ANSWERED else []
     latency_ms = elapsed_ms(start)
     logger.info(
         "ask",
         outcome="ok",
+        status=status,
         question_length=len(request.question),
         sections=[section.number for section in sections],
-        claims=len(claims),
+        verdicts=[claim.verdict for claim in checked],
         latency_ms=latency_ms,
     )
-    text = write_answer(claims)
+    text = write_answer(shown)
     sources = [Source.model_validate(section) for section in sections]
     # Only successful answers are stored. A failed call is in the log with its request ID.
     row = Answer(
@@ -134,8 +142,9 @@ async def ask(
     await session.commit()
     return AskResponse(
         answer_id=row.id,
+        status=status,
         answer=text,
-        claims=claims,
+        claims=shown,
         sources=sources,
         latency_ms=latency_ms,
     )
