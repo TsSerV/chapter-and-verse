@@ -63,12 +63,21 @@ class Draft(BaseModel):
     claims: list[Claim]
 
 
+class Status(StrEnum):
+    ANSWERED = "answered"
+    # No claims, or a claim whose quote is not in the section it cites.
+    REFUSED = "refused"
+
+
 class AskResponse(BaseModel):
     answer_id: int = Field(description="Use it to read the answer back later.")
+    status: Status = Field(description="Refused when a claim failed its check.")
     answer: str = Field(
         description="The answer, with the section cited after each claim."
     )
-    claims: list[Claim] = Field(description="The answer, one claim at a time.")
+    claims: list[CheckedClaim] = Field(
+        description="The answer, one checked claim at a time. Empty when refused."
+    )
     sources: list[Source] = Field(description="The sections given to the model.")
     latency_ms: int = Field(ge=0, description="Time taken to build the answer.")
 

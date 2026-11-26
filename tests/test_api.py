@@ -17,7 +17,7 @@ def test_ask_returns_answer_and_latency() -> None:
 
     assert response.status_code == 200
     body = response.json()
-    assert set(body) == {"answer_id", "answer", "claims", "sources", "latency_ms"}
+    assert set(body) == {"answer_id", "status", "answer", "claims", "sources", "latency_ms"}
     assert isinstance(body["answer"], str)
     assert body["latency_ms"] >= 0
 

@@ -1,8 +1,11 @@
+import json
+
+import pytest
 from fastapi.testclient import TestClient
 from structlog.testing import capture_logs
 
 from chapter_and_verse.errors import UpstreamUnavailable
-from chapter_and_verse.llm import get_answerer
+from chapter_and_verse.llm import Answerer, get_answerer
 from chapter_and_verse.main import app
 from tests.conftest import FAKE_CLAIM, fake_answer
 
@@ -29,7 +32,8 @@ def test_ask_returns_the_claims_and_an_answer_built_from_them() -> None:
     response = client.post("/ask", json={"question": "Can I be dismissed unfairly?"})
 
     body = response.json()
-    assert body["claims"] == [FAKE_CLAIM]
+    assert body["status"] == "answered"
+    assert body["claims"] == [{**FAKE_CLAIM, "verdict": "verified"}]
     assert body["answer"] == (
         "An employee has the right not to be unfairly dismissed. [s. 94]"
     )
@@ -44,8 +48,47 @@ def test_ask_says_it_cannot_answer_when_there_are_no_claims() -> None:
     response = client.post("/ask", json={"question": "What is the speed limit?"})
 
     assert response.status_code == 200
+    assert response.json()["status"] == "refused"
     assert response.json()["claims"] == []
     assert response.json()["answer"].startswith("I cannot answer this")
+
+
+def claims_reply(*claims: dict[str, str]) -> Answerer:
+    async def answer(prompt: str) -> str:
+        return json.dumps({"claims": list(claims)})
+
+    return answer
+
+
+@pytest.mark.parametrize(
+    ("change", "verdict"),
+    [
+        # Words that section 94 does not have.
+        ({"quote": "the right to be dismissed without any notice"}, "quote_not_found"),
+        # A section the model was not given.
+        ({"section": "108"}, "unknown_section"),
+        ({"quote": "the right"}, "quote_too_short"),
+    ],
+)
+def test_ask_refuses_when_a_claim_fails_its_check(
+    change: dict[str, str], verdict: str
+) -> None:
+    # One good claim does not save the answer.
+    app.dependency_overrides[get_answerer] = lambda: claims_reply(
+        FAKE_CLAIM, {**FAKE_CLAIM, **change}
+    )
+
+    with capture_logs() as logs:
+        response = client.post("/ask", json={"question": "Can I be dismissed unfairly?"})
+
+    body = response.json()
+    assert response.status_code == 200
+    assert body["status"] == "refused"
+    assert body["answer"].startswith("I cannot answer this")
+    # The failed claim is not repeated to the caller. The log says which check failed.
+    assert body["claims"] == []
+    assert logs[0]["status"] == "refused"
+    assert logs[0]["verdicts"] == ["verified", verdict]
 
 
 def test_ask_returns_503_when_the_reply_is_not_claims() -> None:
@@ -96,6 +139,8 @@ def test_ask_logs_one_line_without_the_question() -> None:
     assert len(logs) == 1
     assert logs[0]["event"] == "ask"
     assert logs[0]["outcome"] == "ok"
+    assert logs[0]["status"] == "answered"
+    assert logs[0]["verdicts"] == ["verified"]
     assert logs[0]["question_length"] == len(question)
     assert logs[0]["latency_ms"] >= 0
     assert question not in str(logs)
