@@ -35,5 +35,8 @@ async def test_answer_is_stored_and_read_back(
     assert stored.answer == "On 25 May 2018."
     assert stored.model == "test-model"
     assert stored.latency_ms == 1432
+    # Not set here either: a row written without a check says so.
+    assert stored.status == "unverified"
+    assert stored.claims == []
     # The test never set it, so the database filled it in.
     assert isinstance(stored.created_at, datetime)
