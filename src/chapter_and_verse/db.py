@@ -44,6 +44,10 @@ class Answer(Base):
     answer: Mapped[str] = mapped_column(Text)
     # The sections the model was given, each with the date its text is in force from.
     sources: Mapped[list[dict[str, str]]] = mapped_column(JSON, server_default="[]")
+    # answered or refused. Answers stored before the check existed are unverified.
+    status: Mapped[str] = mapped_column(server_default="unverified")
+    # Every claim the model made and what its check found, also when the reply refused.
+    claims: Mapped[list[dict[str, str]]] = mapped_column(JSON, server_default="[]")
     # Which model wrote the answer.
     model: Mapped[str]
     latency_ms: Mapped[int]

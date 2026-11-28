@@ -67,6 +67,8 @@ class Status(StrEnum):
     ANSWERED = "answered"
     # No claims, or a claim whose quote is not in the section it cites.
     REFUSED = "refused"
+    # Only on records stored before answers were checked.
+    UNVERIFIED = "unverified"
 
 
 class AskResponse(BaseModel):
@@ -89,7 +91,11 @@ class AnswerRecord(BaseModel):
     id: int
     request_id: str = Field(description="Matches the X-Request-ID header and the logs.")
     question: str
+    status: Status
     answer: str
+    claims: list[CheckedClaim] = Field(
+        description="Every claim the model made, with its check. Kept when refused too."
+    )
     sources: list[Source] = Field(description="The sections given to the model.")
     model: str = Field(description="The Claude model that wrote the answer.")
     latency_ms: int = Field(ge=0, description="Time taken to build the answer.")

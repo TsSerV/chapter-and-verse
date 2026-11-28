@@ -133,7 +133,10 @@ async def ask(
     row = Answer(
         request_id=structlog.contextvars.get_contextvars()["request_id"],
         question=request.question,
+        status=status,
         answer=text,
+        # All of them, not only the ones shown: the record says why a reply refused.
+        claims=[claim.model_dump(mode="json") for claim in checked],
         sources=[source.model_dump(mode="json") for source in sources],
         model=settings.claude_model,
         latency_ms=latency_ms,
