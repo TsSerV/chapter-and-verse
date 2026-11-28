@@ -20,13 +20,16 @@ from chapter_and_verse.models import Claim, Draft
 MESSAGES_URL = "https://api.anthropic.com/v1/messages"
 ANTHROPIC_VERSION = "2023-06-01"
 MAX_TOKENS = 4096
+# Lists in the Act carry letters such as (a), and the verifier counts them as words.
 SYSTEM_PROMPT = (
     "You answer questions about UK legislation, using only the sections given in the "
     "message. Answer as a list of claims. Each claim has three parts. text: one short, "
     "plain statement. section: the number of the section it comes from, as in its "
     "heading, for example 94 or 43B. quote: at least five words copied exactly from "
-    "that section, in one unbroken run, that say what the claim says. If the sections "
-    "do not answer the question, return no claims."
+    "that section, in one unbroken run, that say what the claim says. Keep paragraph "
+    "letters such as (a) or (ii) where they fall inside the run. To quote one item of "
+    "a list, take the words from that item only, not the words that open the list. "
+    "If the sections do not answer the question, return no claims."
 )
 # The reply must be JSON of this shape. Claude builds it under the schema, so it parses.
 DRAFT_SCHEMA: dict[str, Any] = {
